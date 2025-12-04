@@ -9,7 +9,7 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 
-from quantile_loss import QuantileLoss
+from .quantile_loss import QuantileLoss
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
@@ -101,6 +101,10 @@ def train(EPOCHS=5, BATCH_SIZE=128, TRAIN_FRACTION=0.30, VAL_FRACTION=0.30):
 
     train_df_full = data[data["nageur_id"].isin(train_ids)]
     test_df       = data[data["nageur_id"].isin(test_ids)]
+    
+    os.makedirs("../data/test_data", exist_ok=True)
+    test_df.to_csv("../data/test_data/test_df.csv", index=False)
+    print(f"Saved test data: {len(test_df)} rows")
 
     train_nageurs = np.random.permutation(train_df_full["nageur_id"].unique())
     val_split = int(0.9 * len(train_nageurs))

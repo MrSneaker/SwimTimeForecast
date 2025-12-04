@@ -1,1 +1,4 @@
 data/*
+logs/*
+pids/*
+__pycache__/

@@ -1,6 +1,6 @@
 import argparse
-from train import train
-from test import test
+from .train import train
+from .test import test
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--mode", choices=["train", "test"], required=True)

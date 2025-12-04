@@ -7,8 +7,8 @@ from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
-from train import SwimLSTM                
-from train import SwimIterableDataset    
+from .train import SwimLSTM                
+from .train import SwimIterableDataset    
 
 import os
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -32,25 +32,12 @@ def test():
     print("\nTEST MODE SELECTED\n")
 
     # ------------------ Load dataset ------------------ #
-    data = pd.read_csv("../data/performances_cleaned.csv")
-    
-    max_val = data["perf_temps_sec"].max()
-    print("Max perf_temps_sec :", max_val)
+    test_csv_path = "../data/test_data/test_df.csv"
+    if not os.path.exists(test_csv_path):
+        raise FileNotFoundError(f"Saved test data not found: {test_csv_path}")
 
-    plt.figure(figsize=(10,4))
-    plt.hist(data["perf_temps_sec"], bins=100)
-    plt.axvline(max_val, color='red', linestyle='--', label=f"Max = {max_val:.2f}")
-    plt.title("Distribution de perf_temps_sec")
-    plt.xlabel("Temps (sec)")
-    plt.ylabel("Nombre d'échantillons")
-    plt.legend()
-    plt.show()
-
-    # Test swimmers only
-    nageurs = data["nageur_id"].unique()
-    np.random.shuffle(nageurs)
-    test_ids = nageurs[int(0.8 * len(nageurs)):]
-    test_df = data[data["nageur_id"].isin(test_ids)]
+    test_df = pd.read_csv(test_csv_path)
+    print(f"Loaded test data: {len(test_df)} rows")
 
     # Scale target
     with open("../models/target_scaler.pkl", "rb") as f:
