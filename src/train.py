@@ -37,16 +37,9 @@ class SwimLSTM(nn.Module):
 # Dataset utilities
 # =============================================================
 SEQ_LEN = 10
-FEATURE_COLS = [
-    "perf_nage_encoded",
-    "nageur_sexe_encoded",
-    "nageur_age_mois_scaled",
-    "perf_distance_encoded",
-    "perf_bassin_encoded",
-    "mois_saison_sin",
-    "mois_saison_cos",
-    "perf_temps_sec",
-]
+FEATURE_COLS = ["perf_temps_sec","nageur_age_mois_scaled","perf_nage_encoded",
+             "perf_distance_encoded","perf_bassin_encoded","mois_saison_sin",
+             "mois_saison_cos","nageur_sexe_encoded"]
 TARGET_COL = "perf_temps_sec"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -54,11 +47,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 def create_sequences(df, window=SEQ_LEN):
     X, y = [], []
     for _, group in df.groupby("series_id"):
-        values = group[
-            ["perf_temps_sec","nageur_age_mois_scaled","perf_nage_encoded",
-             "perf_distance_encoded","perf_bassin_encoded","mois_saison_sin",
-             "mois_saison_cos","nageur_sexe_encoded"]
-        ].values
+        values = group[FEATURE_COLS].values
         
         for i in range(len(values) - window):
             X.append(values[i:i+window])

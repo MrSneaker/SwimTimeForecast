@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
+import { Line } from "react-chartjs-2";
+import "chart.js/auto";
 
 export default function App() {
   const [options, setOptions] = useState(null);
   const [form, setForm] = useState({});
-  const [history, setHistory] = useState([]); // tableau des performances
+  const [history, setHistory] = useState([]);
   const [result, setResult] = useState(null);
 
   useEffect(() => {
@@ -22,122 +24,236 @@ export default function App() {
     });
   }, []);
 
-  if (!options) return <div>Chargement des options...</div>;
+  if (!options) return <div style={{ padding: 30 }}>Chargement...</div>;
 
   const handleChange = (e) => {
     const { name, value } = e.target;
     setForm({
       ...form,
-      [name]:
-        name === "nageur_age_mois" || name === "perf_temps_sec"
-          ? parseFloat(value)
-          : value,
+      [name]: ["nageur_age_mois", "perf_temps_sec"].includes(name)
+        ? parseFloat(value)
+        : value,
     });
   };
 
-  const addPerformance = () => {
-    setHistory([...history, { ...form }]);
-    setForm({ ...form, perf_temps_sec: 60 }); // reset pour prochaine saisie
-  };
+  /**
+   * multi-step prediction:
+   * Predict n steps ahead by feeding back each prediction
+   * into the input sequence for the next prediction.
+   */
+  const addPerformance = async () => {
+    const updatedHistory = [...history, { ...form }];
+    setHistory(updatedHistory);
+    setForm({ ...form, perf_temps_sec: 60 });
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+    let currentSequence = updatedHistory;
+
+    const steps = 3;
+    const multiPredictionResult = [];
+
     try {
-      // On envoie toute la séquence (history + entrée courante)
-      const sequence = [...history, form];
-      const res = await axios.post(
-        "http://localhost:8000/predict_seq",
-        { sequence }
-      );
-      setResult(res.data);
+      for (let i = 0; i < steps; i++) {
+        const res = await axios.post("http://localhost:8000/predict_seq", {
+          sequence: currentSequence,
+        });
+
+        const newPrediction = res.data;
+        multiPredictionResult.push(newPrediction);
+
+        currentSequence = [
+          ...currentSequence,
+          {
+            ...currentSequence[currentSequence.length - 1],
+            perf_temps_sec: newPrediction.q50,
+            nageur_age_mois: (currentSequence[currentSequence.length - 1].nageur_age_mois + 1)
+          },
+        ];
+      }
+
+      setResult(multiPredictionResult);
+
     } catch (err) {
-      console.error(err);
+      console.error("Erreur lors de la multi-prédiction:", err);
+      setResult(null);
     }
   };
 
+
+  const lastValue = history.length > 0 ? history[history.length - 1].perf_temps_sec : 0;
+  
+  const predictionQ50s = result ? result.map(p => p.q50) : [];
+  const predictionQ10s = result ? result.map(p => p.q10) : [];
+  const predictionQ90s = result ? result.map(p => p.q90) : [];
+  
+  const numPredictions = predictionQ50s.length; 
+
+  const nullPadding = history.length > 1
+    ? Array(history.length - 1).fill(null)
+    : [];
+
+  
+  const dataQ50 = [...nullPadding, lastValue, ...predictionQ50s];
+  const dataQ10 = [...nullPadding, lastValue, ...predictionQ10s];
+  const dataQ90 = [...nullPadding, lastValue, ...predictionQ90s];
+
+  const predictionPoints = Array(numPredictions).fill(4);
+  const predictionHoverPoints = Array(numPredictions).fill(7);
+
+  const pointRadiusArray = history.length > 0
+    ? [...Array(history.length).fill(0), ...predictionPoints]
+    : [];
+  const pointHoverRadiusArray = history.length > 0
+    ? [...Array(history.length).fill(0), ...predictionHoverPoints]
+    : [];
+  
+  // Labels for the 3 steps (J+1, J+2, J+3)
+  const predictionLabels = Array.from({length: numPredictions}, (_, i) => `Pred J+${i + 1}`);
+
+  // ---------------------------------------------
+
+  const chartData =
+    result && history.length > 0
+      ? {
+        labels: [...history.map((_, i) => `Run ${i + 1}`), ...predictionLabels],
+        datasets: [
+          {
+            label: "True Performance",
+            // We fill with null value to align with J+1, J+2, J+3
+            data: [...history.map((h) => h.perf_temps_sec), ...Array(numPredictions).fill(null)],
+            borderColor: "cyan",
+            backgroundColor: "cyan",
+            borderWidth: 2,
+            tension: 0.2,
+            pointRadius: 4,
+          },
+          {
+            label: "10th percentile (best case)",
+            data: dataQ10,
+            borderColor: "rgba(255, 165, 0, 0.4)",
+            borderWidth: 1,
+            borderDash: [5, 5],
+            fill: false,
+            tension: 0.6,
+            pointRadius: pointRadiusArray,
+            pointBackgroundColor: "rgba(255, 165, 0, 0.6)",
+            pointBorderColor: "#fff",
+            pointHoverRadius: pointHoverRadiusArray,
+          },
+          {
+            label: "Confidence Interval (10-90%)",
+            data: dataQ90,
+            borderColor: "rgba(255, 165, 0, 0.4)",
+            borderWidth: 1,
+            borderDash: [5, 5],
+            backgroundColor: "rgba(255, 165, 0, 0.15)",
+            fill: 1,
+            tension: 0.6,
+            pointRadius: pointRadiusArray,
+            pointBackgroundColor: "rgba(255, 165, 0, 0.6)",
+            pointBorderColor: "#fff",
+            pointHoverRadius: pointHoverRadiusArray,
+          },
+          // Median prediction
+          {
+            label: "Predicted median (50th percentile)",
+            data: dataQ50,
+            borderColor: "orange",
+            borderWidth: 3,
+            borderDash: [7, 7],
+            fill: false,
+            tension: 0, 
+            pointRadius: pointRadiusArray,
+            pointBackgroundColor: "orange",
+            pointBorderColor: "#fff",
+            pointHoverRadius: pointHoverRadiusArray,
+          },
+        ],
+      }
+      : null;
+
   return (
-    <div style={{ padding: 20, maxWidth: 600 }}>
-      <h1>Swim Time Predictor</h1>
+    <div style={styles.container}>
+      <h1 style={styles.title}>🏊 Swim Time Predictor</h1>
 
-      <form onSubmit={handleSubmit}>
-        {/* Champs de formulaire */}
-        <div>
-          <label>Nage : </label>
-          <select name="perf_nage" value={form.perf_nage} onChange={handleChange}>
-            {options.perf_nage.map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
+      {/* Form Card */}
+      <div style={styles.card}>
+        <h2>Ajouter une performance</h2>
+
+        {[
+          { label: "Nage", name: "perf_nage", options: options.perf_nage },
+          { label: "Sexe", name: "nageur_sexe", options: options.nageur_sexe },
+          { label: "Distance", name: "perf_distance", options: options.perf_distance },
+          { label: "Bassin", name: "perf_bassin", options: options.perf_bassin },
+          { label: "Mois saison", name: "mois_saison", options: options.mois_saison },
+        ].map((field) => (
+          <div style={styles.row} key={field.name}>
+            <label>{field.label}</label>
+            <select
+              name={field.name}
+              value={form[field.name]}
+              onChange={handleChange}
+            >
+              {field.options.map((opt, i) => (
+                <option key={i} value={field.name === "mois_saison" ? i : opt}>
+                  {opt}
+                </option>
+              ))}
+            </select>
+          </div>
+        ))}
+
+        <div style={styles.row}>
+          <label>Âge (mois)</label>
+          <input
+            type="number"
+            name="nageur_age_mois"
+            value={form.nageur_age_mois}
+            onChange={handleChange}
+            min={48}
+          />
         </div>
 
-        <div>
-          <label>Sexe : </label>
-          <select name="nageur_sexe" value={form.nageur_sexe} onChange={handleChange}>
-            {options.nageur_sexe.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
+        <div style={styles.row}>
+          <label>Temps (sec)</label>
+          <input
+            type="number"
+            name="perf_temps_sec"
+            value={form.perf_temps_sec}
+            onChange={handleChange}
+          />
         </div>
 
-        <div>
-          <label>Âge (mois) : </label>
-          <input type="number" name="nageur_age_mois" value={form.nageur_age_mois} onChange={handleChange} min={48}/>
-        </div>
+        <button style={styles.btnAdd} onClick={addPerformance}>
+          ➕ Ajouter & prédire
+        </button>
+      </div>
 
-        <div>
-          <label>Distance : </label>
-          <select name="perf_distance" value={form.perf_distance} onChange={handleChange}>
-            {options.perf_distance.map((d) => <option key={d} value={d}>{d} m</option>)}
-          </select>
-        </div>
-
-        <div>
-          <label>Bassin : </label>
-          <select name="perf_bassin" value={form.perf_bassin} onChange={handleChange}>
-            {options.perf_bassin.map((b) => <option key={b} value={b}>{b} m</option>)}
-          </select>
-        </div>
-
-        <div>
-          <label>Mois : </label>
-          <select name="mois_saison" value={form.mois_saison} onChange={handleChange}>
-            {options.mois_saison.map((m, idx) => <option key={idx} value={idx}>{m}</option>)}
-          </select>
-        </div>
-
-        <div>
-          <label>Dernière performance (sec) : </label>
-          <input type="number" name="perf_temps_sec" value={form.perf_temps_sec} onChange={handleChange} min={0}/>
-        </div>
-
-        <div style={{ marginTop: 10 }}>
-          <button type="button" onClick={addPerformance}>Ajouter à la séquence</button>
-          <button type="submit" style={{ marginLeft: 10 }}>Predict</button>
-        </div>
-      </form>
-
-      {/* Affichage de la séquence */}
+      {/* History */}
       {history.length > 0 && (
-        <div style={{ marginTop: 20 }}>
-          <h3>Historique des performances</h3>
-          <table border="1" cellPadding="5">
+        <div style={styles.card}>
+          <h2>📄 Historique</h2>
+          <table style={styles.table}>
             <thead>
               <tr>
+                <th>Temps</th>
                 <th>Nage</th>
                 <th>Sexe</th>
-                <th>Âge (mois)</th>
+                <th>Age</th>
                 <th>Distance</th>
                 <th>Bassin</th>
                 <th>Mois</th>
-                <th>Temps (sec)</th>
               </tr>
             </thead>
             <tbody>
-              {history.map((perf, idx) => (
-                <tr key={idx}>
-                  <td>{perf.perf_nage}</td>
-                  <td>{perf.nageur_sexe}</td>
-                  <td>{perf.nageur_age_mois}</td>
-                  <td>{perf.perf_distance}</td>
-                  <td>{perf.perf_bassin}</td>
-                  <td>{perf.mois_saison}</td>
-                  <td>{perf.perf_temps_sec}</td>
+              {history.map((h, i) => (
+                <tr key={i}>
+                  <td>{h.perf_temps_sec}s</td>
+                  <td>{h.perf_nage}</td>
+                  <td>{h.nageur_sexe}</td>
+                  <td>{h.nageur_age_mois}</td>
+                  <td>{h.perf_distance}</td>
+                  <td>{h.perf_bassin}</td>
+                  <td>{h.mois_saison}</td>
                 </tr>
               ))}
             </tbody>
@@ -145,15 +261,70 @@ export default function App() {
         </div>
       )}
 
-      {/* Résultat prédiction */}
-      {result && (
-        <div style={{ marginTop: 20 }}>
-          <h2>Predictions (seconds)</h2>
-          <p>Q10: {result.q10.toFixed(2)}</p>
-          <p>Q50: {result.q50.toFixed(2)}</p>
-          <p>Q90: {result.q90.toFixed(2)}</p>
+      {/* Prediction */}
+      {result && result.length > 0 && (
+        <div style={{ ...styles.card, height: "50em" }}>
+          <div style={{marginBottom: 20 }}>
+            <h2>📊 Prédiction (Prochaine Course)</h2>
+            <p>
+              <b>Q10 (J+1):</b> {result[0].q10.toFixed(2)} sec
+            </p>
+            <p>
+              <b>Q50 (J+1):</b> {result[0].q50.toFixed(2)} sec (médian)
+            </p>
+            <p>
+              <b>Q90 (J+1):</b> {result[0].q90.toFixed(2)} sec
+            </p>
+          </div>
+
+          <div style={{ width: "100%", height: "70%", marginTop: 5 }}>
+            <Line
+              data={chartData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: "top" } },
+                scales: {
+                  x: { title: { display: true, text: "Performance #" } },
+                  y: { title: { display: true, text: "Temps (sec)" } },
+                },
+              }}
+            />
+          </div>
         </div>
       )}
     </div>
   );
 }
+
+// ---------- STYLES ----------
+const styles = {
+  container: {
+    width: "100vw",
+    minHeight: "100vh",
+    padding: "30px",
+    boxSizing: "border-box",
+    fontFamily: "Arial",
+  },
+  title: { textAlign: "center", marginBottom: 20 },
+  card: {
+    width: "100%",
+    maxWidth: "1200px",
+    margin: "20px auto",
+    background: "#303030ff",
+    padding: 20,
+    borderRadius: 10,
+    boxShadow: "0 2px 10px rgba(0,0,0,0.1)",
+  },
+  row: { display: "flex", justifyContent: "space-between", marginTop: 10 },
+  btnAdd: {
+    marginTop: 15,
+    padding: "8px 20px",
+    background: "#007bff",
+    color: "#fff",
+    border: "none",
+    borderRadius: 6,
+    cursor: "pointer",
+  },
+  table: { width: "100%", borderCollapse: "collapse", marginTop: 10 },
+};

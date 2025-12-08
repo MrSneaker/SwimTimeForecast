@@ -12,16 +12,9 @@ from typing import List
 # === Config ===
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SEQ_LEN = 10
-FEATURE_COLS = [
-    "perf_nage_encoded",
-    "nageur_sexe_encoded",
-    "nageur_age_mois_scaled",
-    "perf_distance_encoded",
-    "perf_bassin_encoded",
-    "mois_saison_sin",
-    "mois_saison_cos",
-    "perf_temps_sec",
-]
+FEATURE_COLS = ["perf_temps_sec","nageur_age_mois_scaled","perf_nage_encoded",
+             "perf_distance_encoded","perf_bassin_encoded","mois_saison_sin",
+             "mois_saison_cos","nageur_sexe_encoded"]
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, "models")
@@ -29,7 +22,7 @@ MODEL_DIR = os.path.join(BASE_DIR, "models")
 MODEL_PATH = os.path.join(MODEL_DIR, "swim_lstm.pt")
 SCALER_PATH = os.path.join(MODEL_DIR, "target_scaler.pkl")
 
-# Encoders/scalers séparés
+# Encoders/scalers
 LE_NAGE_PATH = os.path.join(MODEL_DIR, "encoder_perf_nage.pkl")
 LE_SEXE_PATH = os.path.join(MODEL_DIR, "encoder_sexe.pkl")
 LE_DISTANCE_PATH = os.path.join(MODEL_DIR, "encoder_perf_distance.pkl")
@@ -141,6 +134,5 @@ def predict_seq(input_data: SwimSequenceInputReadable):
     }
     
     print("Predictions (sec):", preds_sec)
-    # print("Predictions (formatted):", [str(round(p,2)) + " sec" for p in preds_sec])
 
     return preds_sec
