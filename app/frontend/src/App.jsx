@@ -1,53 +1,148 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import axios from "axios";
 import { Line } from "react-chartjs-2";
 import "chart.js/auto";
+import "./App.css";
+
+// --- UTILS ---
+const calculateAgeMonths = (birthDate, eventDate) => {
+  const birth = new Date(birthDate);
+  const event = new Date(eventDate);
+  let months = (event.getFullYear() - birth.getFullYear()) * 12;
+  months -= birth.getMonth();
+  months += event.getMonth();
+  return months > 0 ? months : 0;
+};
+
+const formatAgeReadable = (totalMonths) => {
+  if (!totalMonths) return "";
+  const years = Math.floor(totalMonths / 12);
+  const months = totalMonths % 12;
+  return `${years} ans${months > 0 ? ` ${months} mois` : ''}`;
+};
+
+const formatDate = (dateStr) => {
+  if (!dateStr) return "";
+  return new Date(dateStr).toLocaleDateString("fr-FR");
+};
+
+// --- COMPOSANTS ---
+
+const UserProfile = ({ user, setUser, options }) => {
+  const handleChange = (e) => setUser({ ...user, [e.target.name]: e.target.value });
+
+  return (
+    <div className="profile-section">
+      <h2>👤 Profil Nageur</h2>
+      <div className="form-group">
+        <label>Date de naissance</label>
+        <input type="date" name="dob" value={user.dob} onChange={handleChange} />
+      </div>
+      <div className="form-group">
+        <label>Sexe</label>
+        <select name="sexe" value={user.sexe} onChange={handleChange}>
+          {options?.nageur_sexe?.map((opt) => (
+            <option key={opt} value={opt}>{opt}</option>
+          ))}
+        </select>
+      </div>
+      <div className="profile-info">
+        L'âge est calculé automatiquement en fonction de la date de la course.
+      </div>
+    </div>
+  );
+};
 
 export default function App() {
   const [options, setOptions] = useState(null);
-  const [form, setForm] = useState({});
-  const [history, setHistory] = useState([]);
-  const [result, setResult] = useState(null);
+
+  const [user, setUser] = useState({
+    dob: "2005-01-01",
+    sexe: "M"
+  });
+
+  const [fullHistory, setFullHistory] = useState([]);
+
+  const [selectedNage, setSelectedNage] = useState("Nage Libre");
+  const [selectedDistance, setSelectedDistance] = useState("100");
+  const [selectedBassin, setSelectedBassin] = useState("50");
+
+  const [addForm, setAddForm] = useState({
+    date: new Date().toISOString().split('T')[0],
+    time: "",
+  });
+
+  const [predictionCache, setPredictionCache] = useState({});
+
+  const currentDisciplineKey = useMemo(() => {
+    return `${selectedNage}-${selectedDistance}-${selectedBassin}`;
+  }, [selectedNage, selectedDistance, selectedBassin]);
+
+  const result = predictionCache[currentDisciplineKey] || null;
 
   useEffect(() => {
     axios.get("http://localhost:8000/options").then((res) => {
       setOptions(res.data);
-      setForm({
-        perf_nage: res.data.perf_nage[0],
-        nageur_sexe: res.data.nageur_sexe[0],
-        perf_distance: res.data.perf_distance[0],
-        perf_bassin: res.data.perf_bassin[0],
-        mois_saison: 0,
-        nageur_age_mois: 180,
-        perf_temps_sec: 60,
-      });
+      // Set defaults
+      if (res.data.nageur_sexe) setUser(u => ({ ...u, sexe: res.data.nageur_sexe[0] }));
     });
   }, []);
 
-  if (!options) return <div style={{ padding: 30 }}>Chargement...</div>;
+  // --- LOGIQUE FILTRAGE ---
 
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setForm({
-      ...form,
-      [name]: ["nageur_age_mois", "perf_temps_sec"].includes(name)
-        ? parseFloat(value)
-        : value,
-    });
+  const filteredHistory = useMemo(() => {
+    return fullHistory.filter(h =>
+      h.perf_nage === selectedNage &&
+      String(h.perf_distance) === String(selectedDistance) &&
+      String(h.perf_bassin) === String(selectedBassin)
+    ).sort((a, b) => new Date(a.date) - new Date(b.date)); // Tri chronologique
+  }, [fullHistory, selectedNage, selectedDistance, selectedBassin]);
+
+  useEffect(() => {
+    if (predictionCache[currentDisciplineKey]) {
+      return;
+    }
+
+    if (filteredHistory.length > 0) {
+      predictSequence(filteredHistory, currentDisciplineKey);
+    }
+
+  }, [currentDisciplineKey, filteredHistory.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- LOGIQUE AJOUT & PREDICTION ---
+
+  const handleAddPerformance = async () => {
+    if (!addForm.time || !user.dob) {
+      alert("Veuillez remplir le temps et vérifier votre date de naissance.");
+      return;
+    }
+
+    const ageMois = calculateAgeMonths(user.dob, addForm.date);
+    const dateObj = new Date(addForm.date);
+    const moisSaison = dateObj.getMonth(); // 0-11
+
+    const newEntry = {
+      perf_nage: selectedNage,
+      nageur_sexe: user.sexe,
+      perf_distance: parseInt(selectedDistance),
+      perf_bassin: parseInt(selectedBassin),
+      mois_saison: moisSaison,
+      nageur_age_mois: ageMois,
+      perf_temps_sec: parseFloat(addForm.time),
+      date: addForm.date
+    };
+
+    const updatedFiltered = [...filteredHistory, newEntry];
+    setFullHistory(prevHistory => [...prevHistory, newEntry]);
+    setAddForm({ ...addForm, time: "" });
+
+    await predictSequence(updatedFiltered, currentDisciplineKey);
   };
 
-  /**
-   * multi-step prediction:
-   * Predict n steps ahead by feeding back each prediction
-   * into the input sequence for the next prediction.
-   */
-  const addPerformance = async () => {
-    const updatedHistory = [...history, { ...form }];
-    setHistory(updatedHistory);
-    setForm({ ...form, perf_temps_sec: 60 });
+  const predictSequence = async (sequenceData, keyToCache) => {
+    if (sequenceData.length === 0) return;
 
-    let currentSequence = updatedHistory;
-
+    let currentSequence = [...sequenceData];
     const steps = 3;
     const multiPredictionResult = [];
 
@@ -57,274 +152,268 @@ export default function App() {
           sequence: currentSequence,
         });
 
-        const newPrediction = res.data;
-        multiPredictionResult.push(newPrediction);
+        const pred = res.data;
+        multiPredictionResult.push(pred);
 
+        const lastItem = currentSequence[currentSequence.length - 1];
         currentSequence = [
           ...currentSequence,
           {
-            ...currentSequence[currentSequence.length - 1],
-            perf_temps_sec: newPrediction.q50,
-            nageur_age_mois: (currentSequence[currentSequence.length - 1].nageur_age_mois + 1)
+            ...lastItem,
+            perf_temps_sec: pred.q50,
+            nageur_age_mois: lastItem.nageur_age_mois + 1,
+            mois_saison: (lastItem.mois_saison + 1) % 12
           },
         ];
       }
 
-      setResult(multiPredictionResult);
+      setPredictionCache(prevCache => ({
+        ...prevCache,
+        [keyToCache]: multiPredictionResult,
+      }));
 
     } catch (err) {
-      console.error("Erreur lors de la multi-prédiction:", err);
-      setResult(null);
+      console.error("Erreur prédiction:", err);
+      setPredictionCache(prevCache => {
+        const newCache = { ...prevCache };
+        delete newCache[keyToCache];
+        return newCache;
+      });
     }
   };
 
+  // --- CHART DATA PREPARATION ---
 
-  const lastValue = history.length > 0 ? history[history.length - 1].perf_temps_sec : 0;
-  
-  const predictionQ50s = result ? result.map(p => p.q50) : [];
-  const predictionQ10s = result ? result.map(p => p.q10) : [];
-  const predictionQ90s = result ? result.map(p => p.q90) : [];
-  
-  const numPredictions = predictionQ50s.length; 
+  const getChartData = () => {
+    if (!filteredHistory.length && !result) return null;
 
-  const nullPadding = history.length > 1
-    ? Array(history.length - 1).fill(null)
-    : [];
+    const realData = filteredHistory.map(h => h.perf_temps_sec);
+    const labels = filteredHistory.map(h => formatDate(h.date));
 
-  
-  const dataQ50 = [...nullPadding, lastValue, ...predictionQ50s];
-  const dataQ10 = [...nullPadding, lastValue, ...predictionQ10s];
-  const dataQ90 = [...nullPadding, lastValue, ...predictionQ90s];
+    // Ajout des labels prédictifs
+    const predLabels = ["Prochaine", "J+2", "J+3"];
 
-  const predictionPoints = Array(numPredictions).fill(4);
-  const predictionHoverPoints = Array(numPredictions).fill(7);
+    const predDataQ50 = result ? result.map(r => r.q50) : [];
+    const predDataQ10 = result ? result.map(r => r.q10) : [];
+    const predDataQ90 = result ? result.map(r => r.q90) : [];
 
-  const pointRadiusArray = history.length > 0
-    ? [...Array(history.length).fill(0), ...predictionPoints]
-    : [];
-  const pointHoverRadiusArray = history.length > 0
-    ? [...Array(history.length).fill(0), ...predictionHoverPoints]
-    : [];
-  
-  // Labels for the 3 steps (J+1, J+2, J+3)
-  const predictionLabels = Array.from({length: numPredictions}, (_, i) => `Pred J+${i + 1}`);
+    // Padding pour aligner les prédictions
+    const padding = Array(realData.length - 1).fill(null);
+    const lastRealVal = realData[realData.length - 1] || 0;
 
-  // ---------------------------------------------
+    return {
+      labels: [...labels, ...predLabels],
+      datasets: [
+        // Index 0: Historique réel
+        {
+          label: "Performance Réelle",
+          data: [...realData, null, null, null],
+          borderColor: "#00d4ff",
+          backgroundColor: "#00d4ff",
+          tension: 0.2,
+          pointRadius: 6,
+          pointHoverRadius: 8,
+        },
+        // Index 1: Q10
+        {
+          label: "Q10 (Meilleur cas)",
+          data: [...padding, lastRealVal, ...predDataQ10],
+          borderColor: "rgba(255, 0, 122, 0.3)",
+          backgroundColor: "transparent",
+          borderDash: [5, 5],
+          pointRadius: 4,
+          pointBackgroundColor: "rgba(255, 0, 122, 0.3)",
+          fill: false,
+        },
+        // Index 2: Q90
+        {
+          label: "Intervalle 10-90%",
+          data: [...padding, lastRealVal, ...predDataQ90],
+          borderColor: "rgba(255, 0, 122, 0.3)",
+          backgroundColor: "rgba(255, 0, 122, 0.15)",
+          borderDash: [5, 5],
+          pointRadius: 4,
+          pointBackgroundColor: "rgba(255, 0, 122, 0.3)",
+          fill: 1,
+        },
+        // Index 3: Q50 (Médiane)
+        {
+          label: "Prédiction (Médiane)",
+          data: [...padding, lastRealVal, ...predDataQ50],
+          borderColor: "#ff007a",
+          borderWidth: 3,
+          borderDash: [2, 2],
+          pointRadius: 5,
+          pointBackgroundColor: "#ff007a",
+          pointBorderColor: "#fff",
+          fill: false,
+        }
+      ],
+    };
+  };
 
-  const chartData =
-    result && history.length > 0
-      ? {
-        labels: [...history.map((_, i) => `Run ${i + 1}`), ...predictionLabels],
-        datasets: [
-          {
-            label: "True Performance",
-            // We fill with null value to align with J+1, J+2, J+3
-            data: [...history.map((h) => h.perf_temps_sec), ...Array(numPredictions).fill(null)],
-            borderColor: "cyan",
-            backgroundColor: "cyan",
-            borderWidth: 2,
-            tension: 0.2,
-            pointRadius: 4,
-          },
-          {
-            label: "10th percentile (best case)",
-            data: dataQ10,
-            borderColor: "rgba(255, 165, 0, 0.4)",
-            borderWidth: 1,
-            borderDash: [5, 5],
-            fill: false,
-            tension: 0.6,
-            pointRadius: pointRadiusArray,
-            pointBackgroundColor: "rgba(255, 165, 0, 0.6)",
-            pointBorderColor: "#fff",
-            pointHoverRadius: pointHoverRadiusArray,
-          },
-          {
-            label: "Confidence Interval (10-90%)",
-            data: dataQ90,
-            borderColor: "rgba(255, 165, 0, 0.4)",
-            borderWidth: 1,
-            borderDash: [5, 5],
-            backgroundColor: "rgba(255, 165, 0, 0.15)",
-            fill: 1,
-            tension: 0.6,
-            pointRadius: pointRadiusArray,
-            pointBackgroundColor: "rgba(255, 165, 0, 0.6)",
-            pointBorderColor: "#fff",
-            pointHoverRadius: pointHoverRadiusArray,
-          },
-          // Median prediction
-          {
-            label: "Predicted median (50th percentile)",
-            data: dataQ50,
-            borderColor: "orange",
-            borderWidth: 3,
-            borderDash: [7, 7],
-            fill: false,
-            tension: 0, 
-            pointRadius: pointRadiusArray,
-            pointBackgroundColor: "orange",
-            pointBorderColor: "#fff",
-            pointHoverRadius: pointHoverRadiusArray,
-          },
-        ],
-      }
-      : null;
+  if (!options) return <div className="app-container">Chargement...</div>;
 
   return (
-    <div style={styles.container}>
-      <h1 style={styles.title}>🏊 Swim Time Predictor</h1>
+    <div className="app-container">
+      {/* SIDEBAR GAUCHE */}
+      <aside className="sidebar">
+        <h1 style={{ color: 'white' }}>🏊 SwimAI</h1>
+        <UserProfile user={user} setUser={setUser} options={options} />
 
-      {/* Form Card */}
-      <div style={styles.card}>
-        <h2>Ajouter une performance</h2>
+        <div className="card" style={{ marginTop: 'auto', background: 'rgba(255,255,255,0.05)' }}>
+          <h3>Astuce</h3>
+          <p style={{ fontSize: '0.85rem', color: '#aaa' }}>
+            Sélectionnez une épreuve ci-dessus pour voir l'historique spécifique et lancer une prédiction.
+          </p>
+        </div>
+      </aside>
 
-        {[
-          { label: "Nage", name: "perf_nage", options: options.perf_nage },
-          { label: "Sexe", name: "nageur_sexe", options: options.nageur_sexe },
-          { label: "Distance", name: "perf_distance", options: options.perf_distance },
-          { label: "Bassin", name: "perf_bassin", options: options.perf_bassin },
-          { label: "Mois saison", name: "mois_saison", options: options.mois_saison },
-        ].map((field) => (
-          <div style={styles.row} key={field.name}>
-            <label>{field.label}</label>
-            <select
-              name={field.name}
-              value={form[field.name]}
-              onChange={handleChange}
+      {/* CONTENU PRINCIPAL */}
+      <main className="main-content">
+
+        {/* 1. SELECTION DU CONTEXTE (ONLGETS) */}
+        <div className="tabs">
+          {options.perf_nage.map(nage => (
+            <button
+              key={nage}
+              className={`tab-btn ${selectedNage === nage ? "active" : ""}`}
+              onClick={() => {
+                setSelectedNage(nage);
+              }}
             >
-              {field.options.map((opt, i) => (
-                <option key={i} value={field.name === "mois_saison" ? i : opt}>
-                  {opt}
-                </option>
-              ))}
+              {nage}
+            </button>
+          ))}
+        </div>
+
+        <div className="controls-bar">
+          <div style={{ flex: 1 }}>
+            <label style={{ color: '#aaa', fontSize: '0.8rem' }}>Distance</label>
+            <select value={selectedDistance} onChange={e => { setSelectedDistance(e.target.value); }}>
+              {options.perf_distance.map(d => <option key={d} value={d}>{d}m</option>)}
             </select>
           </div>
-        ))}
-
-        <div style={styles.row}>
-          <label>Âge (mois)</label>
-          <input
-            type="number"
-            name="nageur_age_mois"
-            value={form.nageur_age_mois}
-            onChange={handleChange}
-            min={48}
-          />
+          <div style={{ flex: 1 }}>
+            <label style={{ color: '#aaa', fontSize: '0.8rem' }}>Bassin</label>
+            <select value={selectedBassin} onChange={e => { setSelectedBassin(e.target.value); }}>
+              {options.perf_bassin.map(b => <option key={b} value={b}>{b}m</option>)}
+            </select>
+          </div>
         </div>
 
-        <div style={styles.row}>
-          <label>Temps (sec)</label>
-          <input
-            type="number"
-            name="perf_temps_sec"
-            value={form.perf_temps_sec}
-            onChange={handleChange}
-          />
+        {/* 2. GRAPHIQUE & STATS */}
+        <div className="card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3>📈 Progression : {selectedDistance}m {selectedNage} ({selectedBassin}m)</h3>
+            {filteredHistory.length > 0 && (
+              <span style={{ color: '#00d4ff' }}>Record: {Math.min(...filteredHistory.map(h => h.perf_temps_sec))}s</span>
+            )}
+          </div>
+
+          {result && (
+            <div className="prediction-stats">
+              <div className="stat-box">
+                <div className="stat-value">{result[0].q10.toFixed(2)}s</div>
+                <div className="stat-label">Best Case (Q10)</div>
+              </div>
+              <div className="stat-box">
+                <div className="stat-value" style={{ color: '#fff' }}>{result[0].q50.toFixed(2)}s</div>
+                <div className="stat-label">Attendu (Moyenne)</div>
+              </div>
+              <div className="stat-box">
+                <div className="stat-value">{result[0].q90.toFixed(2)}s</div>
+                <div className="stat-label">Worst Case (Q90)</div>
+              </div>
+            </div>
+          )}
+
+          <div style={{ height: "300px", width: "100%" }}>
+            {filteredHistory.length > 0 ? (
+              <Line
+                data={getChartData()}
+                options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  plugins: { legend: { display: true } },
+                  scales: {
+                    x: { grid: { color: '#333' } },
+                    y: { grid: { color: '#333' } }
+                  }
+                }}
+              />
+            ) : (
+              <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666' }}>
+                Aucune donnée pour cette épreuve. Ajoutez une performance ci-dessous.
+              </div>
+            )}
+          </div>
         </div>
 
-        <button style={styles.btnAdd} onClick={addPerformance}>
-          ➕ Ajouter & prédire
-        </button>
-      </div>
+        {/* 3. FORMULAIRE D'AJOUT CONTEXTUEL */}
+        <div className="card" style={{ borderLeft: '4px solid #00d4ff' }}>
+          <h3>⏱️ Ajouter une performance</h3>
+          <p style={{ fontSize: '0.9rem', color: '#888', marginBottom: '1rem' }}>
+            Ajout pour : <b>{selectedDistance}m {selectedNage}</b> en bassin de <b>{selectedBassin}m</b>
+          </p>
 
-      {/* History */}
-      {history.length > 0 && (
-        <div style={styles.card}>
-          <h2>📄 Historique</h2>
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th>Temps</th>
-                <th>Nage</th>
-                <th>Sexe</th>
-                <th>Age</th>
-                <th>Distance</th>
-                <th>Bassin</th>
-                <th>Mois</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.map((h, i) => (
-                <tr key={i}>
-                  <td>{h.perf_temps_sec}s</td>
-                  <td>{h.perf_nage}</td>
-                  <td>{h.nageur_sexe}</td>
-                  <td>{h.nageur_age_mois}</td>
-                  <td>{h.perf_distance}</td>
-                  <td>{h.perf_bassin}</td>
-                  <td>{h.mois_saison}</td>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '1rem', alignItems: 'end' }}>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>Date de la course</label>
+              <input
+                type="date"
+                value={addForm.date}
+                onChange={(e) => setAddForm({ ...addForm, date: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>Temps (secondes)</label>
+              <input
+                type="number"
+                step="0.01"
+                placeholder="Ex: 65.40"
+                value={addForm.time}
+                onChange={(e) => setAddForm({ ...addForm, time: e.target.value })}
+              />
+            </div>
+
+            <button className="btn-primary" style={{ height: '42px' }} onClick={handleAddPerformance}>
+              Ajouter & Prédire
+            </button>
+          </div>
+        </div>
+
+        {/* 4. TABLEAU HISTORIQUE */}
+        {filteredHistory.length > 0 && (
+          <div className="card">
+            <h3>Historique Détaillé</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Age</th>
+                  <th>Temps</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </thead>
+              <tbody>
+                {filteredHistory.slice().reverse().map((h, i) => (
+                  <tr key={i}>
+                    <td>{formatDate(h.date)}</td>
 
-      {/* Prediction */}
-      {result && result.length > 0 && (
-        <div style={{ ...styles.card, height: "50em" }}>
-          <div style={{marginBottom: 20 }}>
-            <h2>📊 Prédiction (Prochaine Course)</h2>
-            <p>
-              <b>Q10 (J+1):</b> {result[0].q10.toFixed(2)} sec
-            </p>
-            <p>
-              <b>Q50 (J+1):</b> {result[0].q50.toFixed(2)} sec (médian)
-            </p>
-            <p>
-              <b>Q90 (J+1):</b> {result[0].q90.toFixed(2)} sec
-            </p>
-          </div>
+                    <td style={{ color: '#aaa' }}>
+                      {formatAgeReadable(h.nageur_age_mois)}
+                    </td>
 
-          <div style={{ width: "100%", height: "70%", marginTop: 5 }}>
-            <Line
-              data={chartData}
-              options={{
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { position: "top" } },
-                scales: {
-                  x: { title: { display: true, text: "Performance #" } },
-                  y: { title: { display: true, text: "Temps (sec)" } },
-                },
-              }}
-            />
+                    <td style={{ color: '#fff', fontWeight: 'bold' }}>{h.perf_temps_sec} s</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </div>
-      )}
+        )}
+
+      </main>
     </div>
   );
 }
-
-// ---------- STYLES ----------
-const styles = {
-  container: {
-    width: "100vw",
-    minHeight: "100vh",
-    padding: "30px",
-    boxSizing: "border-box",
-    fontFamily: "Arial",
-  },
-  title: { textAlign: "center", marginBottom: 20 },
-  card: {
-    width: "100%",
-    maxWidth: "1200px",
-    margin: "20px auto",
-    background: "#303030ff",
-    padding: 20,
-    borderRadius: 10,
-    boxShadow: "0 2px 10px rgba(0,0,0,0.1)",
-  },
-  row: { display: "flex", justifyContent: "space-between", marginTop: 10 },
-  btnAdd: {
-    marginTop: 15,
-    padding: "8px 20px",
-    background: "#007bff",
-    color: "#fff",
-    border: "none",
-    borderRadius: 6,
-    cursor: "pointer",
-  },
-  table: { width: "100%", borderCollapse: "collapse", marginTop: 10 },
-};
