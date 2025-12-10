@@ -23,6 +23,7 @@ Le serveur sera accessible sur `http://localhost:8000`
 Retourne les valeurs valides pour les champs catégoriels.
 
 **Réponse:**
+
 ```json
 {
   "perf_nage": ["Nage Libre", "Dos", "Brasse", "Papillon", "4 Nages"],
@@ -40,6 +41,7 @@ Retourne les valeurs valides pour les champs catégoriels.
 Prédit le temps de nage basé sur une séquence de performances passées.
 
 **Corps de la requête:**
+
 ```json
 {
   "sequence": [
@@ -69,12 +71,14 @@ Prédit le temps de nage basé sur une séquence de performances passées.
 | `perf_temps_sec` | float | Temps en secondes | `65.5` |
 
 **Note sur la séquence:**
+
 - Le modèle attend **10 entrées** (séquence temporelle)
 - Si moins de 10 entrées sont fournies, la dernière sera dupliquée pour compléter
 - Si plus de 10, seules les 10 dernières sont utilisées
 - Les entrées doivent être dans l'**ordre chronologique** (plus ancien → plus récent)
 
 **Réponse:**
+
 ```json
 {
   "q10": 64.2,
