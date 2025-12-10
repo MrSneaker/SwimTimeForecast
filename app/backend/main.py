@@ -4,10 +4,30 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import torch
+import torch.nn as nn
 import pickle
 import numpy as np
 import pandas as pd
 from typing import List
+
+
+# === Model Definition ===
+class SwimLSTM(nn.Module):
+    def __init__(self, input_dim, hidden_dim=512, num_layers=2, dropout=0.2):
+        super().__init__()
+        self.lstm = nn.LSTM(
+            input_dim,
+            hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout,
+        )
+        self.fc = nn.Linear(hidden_dim, 3)
+
+    def forward(self, x):
+        out, _ = self.lstm(x)
+        return self.fc(out[:, -1, :])
+
 
 # === Config ===
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -30,8 +50,6 @@ LE_BASSIN_PATH = os.path.join(MODEL_DIR, "encoder_perf_bassin.pkl")
 SCALER_AGE_PATH = os.path.join(MODEL_DIR, "scaler_age.pkl")
 
 # === Load model & scaler ===
-from src.train import SwimLSTM
-
 model = SwimLSTM(input_dim=len(FEATURE_COLS))
 model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
 model.to(DEVICE)
