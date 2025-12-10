@@ -9,7 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy requirements first for caching
 COPY requirements-docker.txt .
-RUN pip install --no-cache-dir -r requirements-docker.txt
+RUN pip install --no-cache-dir -r requirements-docker.txt \
+    && rm -rf /root/.cache/pip
 
 # Copy backend code
 COPY . .
