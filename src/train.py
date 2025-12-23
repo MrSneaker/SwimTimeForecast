@@ -1,5 +1,7 @@
 import os
+import json
 import pickle
+from regex import E
 import torch
 import torch.nn as nn
 import pandas as pd
@@ -9,7 +11,10 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 from sklearn.preprocessing import StandardScaler
 
+from .custom_dataloader import SwimDataset
+
 from .quantile_loss import QuantileLoss
+from .early_stopper import EarlyStopper
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
@@ -17,7 +22,7 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 # Model Definition
 # =============================================================
 class SwimLSTM(nn.Module):
-    def __init__(self, input_dim, hidden_dim=512, num_layers=2, dropout=0.2):
+    def __init__(self, input_dim, hidden_dim=256, num_layers=2, dropout=0.4):
         super().__init__()
         self.lstm = nn.LSTM(
             input_dim,
@@ -44,39 +49,28 @@ TARGET_COL = "perf_temps_sec"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def create_sequences(df, window=SEQ_LEN):
-    X, y = [], []
-    for _, group in df.groupby("series_id"):
-        values = group[FEATURE_COLS].values
-        
-        for i in range(len(values) - window):
-            X.append(values[i:i+window])
-            y.append(values[i+window][0])
-    
-    return np.array(X), np.array(y)
-
-
-class SwimIterableDataset(torch.utils.data.IterableDataset):
-    def __init__(self, df, seq_len):
-        self.df = df
-        self.seq_len = seq_len
-        self.n_samples = sum(max(0, len(g)-seq_len) for _, g in df.groupby("series_id"))
-
-    def __iter__(self):
-        X, y = create_sequences(self.df, self.seq_len)
-        for seq, target in zip(X, y):
-            yield torch.tensor(seq, dtype=torch.float32), torch.tensor(target, dtype=torch.float32)
-
-    def __len__(self):
-        return self.n_samples
-
-
 # =============================================================
 # Training FUNCTION (callable from main.py)
 # =============================================================
 
-def train(EPOCHS=5, BATCH_SIZE=128, TRAIN_FRACTION=0.30, VAL_FRACTION=0.30):
+def train(EPOCHS=5, BATCH_SIZE=128, TRAIN_FRACTION=0.30, VAL_FRACTION=0.30, use_optimized=False):
     print("\nTRAIN MODE SELECTED\n")
+    
+    if use_optimized:
+        print("Loading optimized hyperparameters from best_params.json")
+        with open("../models/best_params.json", "r") as f:
+            best_params = json.load(f)
+        BATCH_SIZE = best_params["batch_size"]
+        LR = best_params["lr"]
+        HIDDEN_DIM = best_params["hidden_dim"]
+        NUM_LAYERS = best_params["num_layers"]
+        DROPOUT = best_params["dropout"]
+        print(f"Using parameters: Batch Size={BATCH_SIZE}, LR={LR}, Hidden Dim={HIDDEN_DIM}, Num Layers={NUM_LAYERS}, Dropout={DROPOUT}")
+    else:
+        LR = 5e-4
+        HIDDEN_DIM = 256
+        NUM_LAYERS = 4
+        DROPOUT = 0.4
 
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     data = pd.read_csv("../data/performances_cleaned.csv")
@@ -122,14 +116,33 @@ def train(EPOCHS=5, BATCH_SIZE=128, TRAIN_FRACTION=0.30, VAL_FRACTION=0.30):
     train_df = train_df[train_df.groupby("series_id").series_id.transform('count')>=min_len]
     val_df   = val_df[val_df.groupby("series_id").series_id.transform('count')>=min_len]
 
-    train_loader = DataLoader(SwimIterableDataset(train_df, SEQ_LEN), batch_size=BATCH_SIZE)
-    val_loader   = DataLoader(SwimIterableDataset(val_df,   SEQ_LEN), batch_size=BATCH_SIZE)
+    train_dataset = SwimDataset(train_df, SEQ_LEN, FEATURE_COLS)
+    val_dataset   = SwimDataset(val_df, SEQ_LEN, FEATURE_COLS)
+
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=BATCH_SIZE, 
+        shuffle=True,         
+        num_workers=4,          
+        pin_memory=True,        
+        persistent_workers=True
+    )
+
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=BATCH_SIZE, 
+        shuffle=False, 
+        num_workers=4,
+        pin_memory=True,
+        persistent_workers=True
+    )
 
     print(f"Training samples: {len(train_loader.dataset)}, Val samples: {len(val_loader.dataset)}")
 
     # ---------------- model + training ---------------- #
-    model = SwimLSTM(input_dim=len(FEATURE_COLS)).to(DEVICE)
-    optimizer = torch.optim.Adam(model.parameters(), lr=5e-4)
+    model = SwimLSTM(input_dim=len(FEATURE_COLS), hidden_dim=HIDDEN_DIM, num_layers=NUM_LAYERS, dropout=DROPOUT).to(DEVICE)
+    # model = torch.compile(model, mode="reduce-overhead") # Uncomment if using PyTorch 2.0+ with python<=3.11
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     quantiles = [0.1,0.5,0.9]
     loss_fn = [QuantileLoss(q) for q in quantiles]
 
@@ -137,6 +150,9 @@ def train(EPOCHS=5, BATCH_SIZE=128, TRAIN_FRACTION=0.30, VAL_FRACTION=0.30):
         return sum(loss_fn[i](pred[:,i], y) for i in range(3))
 
     train_hist, val_hist = [], []
+    early_stopper = EarlyStopper(patience=7, min_delta=0.0001)
+
+    best_model_path = "../models/swim_lstm_best.pt"
 
     for epoch in range(EPOCHS):
         model.train()
@@ -149,6 +165,7 @@ def train(EPOCHS=5, BATCH_SIZE=128, TRAIN_FRACTION=0.30, VAL_FRACTION=0.30):
             pred = model(Xb)
             loss = quantile_loss(pred, yb)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
             total += loss.item()*len(Xb)
@@ -167,6 +184,16 @@ def train(EPOCHS=5, BATCH_SIZE=128, TRAIN_FRACTION=0.30, VAL_FRACTION=0.30):
                 total+=loss.item()*len(Xb)
 
         avg_val = total/len(val_loader.dataset)
+        
+        stop_training, save_model = early_stopper.check(avg_val)
+
+        if save_model:
+            torch.save(model.state_dict(), best_model_path)
+            print(f"   >>> New Best Model Saved (Val Loss: {avg_val:.4f})")
+        if stop_training:
+            print(f"Early stopping triggered at epoch {epoch+1}")
+            break
+        
         val_hist.append(avg_val)
 
         print(f"Epoch {epoch+1} | Train {avg_train:.4f} | Val {avg_val:.4f}")
@@ -174,13 +201,19 @@ def train(EPOCHS=5, BATCH_SIZE=128, TRAIN_FRACTION=0.30, VAL_FRACTION=0.30):
 
     # ---------------- Save model ---------------- #
     os.makedirs("../models", exist_ok=True)
-    torch.save(model.state_dict(), "../models/swim_lstm.pt")
+    
+    if os.path.exists(best_model_path):
+        print("Loading best model for final save...")
+        model.load_state_dict(torch.load(best_model_path))
+        torch.save(model.state_dict(), "../models/swim_lstm.pt")
     print("\nModel saved at: ../models/swim_lstm.pt")
 
-    # optional loss curve
     plt.plot(train_hist,label="train")
     plt.plot(val_hist,label="val")
     plt.legend(); plt.grid(); plt.title("Training Curves")
+    date_now = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+    training_id = f"E{EPOCHS}_B{BATCH_SIZE}_H{HIDDEN_DIM}_L{NUM_LAYERS}_D{DROPOUT}_LR{LR}_{date_now}"
+    plt.savefig(f"../model_result/training_curve_{training_id}.png")
     plt.show()
 
     print("\nTraining Complete.\n")
