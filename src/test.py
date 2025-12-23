@@ -4,11 +4,10 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
-from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
 from .train import SwimLSTM                
-from .train import SwimIterableDataset    
+from .custom_dataloader import SwimDataset    
 
 import os
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -58,13 +57,15 @@ def test(save_figures=True, show_figures=True):
     test_df = test_df[test_df["series_id"].isin(valid_series)]
 
     test_loader = DataLoader(
-        SwimIterableDataset(test_df, SEQ_LEN),
-        batch_size=BATCH_SIZE,
-        shuffle=False
+        SwimDataset(test_df, SEQ_LEN, FEATURE_COLS),
+        batch_size=BATCH_SIZE, 
+        shuffle=False, 
+        num_workers=4,
+        pin_memory=True
     )
 
     # ------------------ Load Model ------------------ #
-    model = SwimLSTM(input_dim=len(FEATURE_COLS)).to(DEVICE)
+    model = SwimLSTM(input_dim=len(FEATURE_COLS), hidden_dim=128, num_layers=4, dropout=0.49726187436364466).to(DEVICE)
     model.load_state_dict(torch.load("../models/swim_lstm.pt", map_location=DEVICE))
     model.eval()
 
@@ -192,4 +193,4 @@ def test(save_figures=True, show_figures=True):
     plt.grid(True, axis='y')
     save_or_show(fig, "boxplot_comparison")
 
-    print("\n Testing complete. Results saved to /model_result/ 📁\n")
+    print("\n Testing complete. Results saved to /model_result/\n")
