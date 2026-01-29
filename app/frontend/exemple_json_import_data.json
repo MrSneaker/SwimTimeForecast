@@ -1,0 +1,36 @@
+[
+  { "date": "2018-02-15", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 59.80 },
+  { "date": "2018-04-10", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 58.90 },
+  { "date": "2018-06-25", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 57.45 },
+  
+  { "date": "2018-11-12", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 58.10 },
+  { "date": "2019-01-20", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 58.50 },
+  { "date": "2019-03-15", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 57.10 },
+  { "date": "2019-05-22", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 56.80 },
+  { "date": "2019-07-18", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 55.95 },
+  
+  { "date": "2019-12-10", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 56.40 },
+  { "date": "2020-02-15", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 56.10 },
+  
+  { "date": "2020-09-25", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 57.20 },
+  { "date": "2020-12-18", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 55.80 },
+  { "date": "2021-03-10", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 55.90 },
+  { "date": "2021-06-05", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 54.20 },
+  
+  { "date": "2021-11-15", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 55.10 },
+  { "date": "2022-01-28", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 55.60 },
+  { "date": "2022-03-14", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 54.05 },
+  { "date": "2022-04-10", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 52.85 },
+  { "date": "2022-07-20", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 52.50 },
+  
+  { "date": "2022-10-30", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 53.80 },
+  { "date": "2023-02-12", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 53.20 },
+  { "date": "2023-04-05", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 51.90 },
+  { "date": "2023-05-25", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 52.10 },
+  { "date": "2023-08-02", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 51.10 },
+  
+  { "date": "2023-11-15", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 52.40 },
+  { "date": "2024-01-20", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 52.90 },
+  { "date": "2024-03-18", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 51.60 },
+  { "date": "2024-06-15", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 50.40 }
+]

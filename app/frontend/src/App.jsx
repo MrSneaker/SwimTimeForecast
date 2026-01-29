@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import axios from "axios";
 import { Line } from "react-chartjs-2";
 import "chart.js/auto";
@@ -55,6 +55,9 @@ const UserProfile = ({ user, setUser, options }) => {
 
 export default function App() {
   const [options, setOptions] = useState(null);
+  
+  // Référence pour l'input file caché
+  const fileInputRef = useRef(null);
 
   const [user, setUser] = useState({
     dob: "2005-01-01",
@@ -83,10 +86,55 @@ export default function App() {
   useEffect(() => {
     axios.get("http://localhost:8000/options").then((res) => {
       setOptions(res.data);
-      // Set defaults
       if (res.data.nageur_sexe) setUser(u => ({ ...u, sexe: res.data.nageur_sexe[0] }));
     });
   }, []);
+
+  // --- LOGIQUE IMPORT JSON ---
+
+  const handleJsonImport = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const jsonData = JSON.parse(event.target.result);
+        
+        // Validation basique et transformation
+        if (!Array.isArray(jsonData)) throw new Error("Le format doit être un tableau JSON");
+
+        const enrichedHistory = jsonData.map(item => {
+           // Calculs dérivés basés sur le profil actuel
+           const ageMois = calculateAgeMonths(user.dob, item.date);
+           const dateObj = new Date(item.date);
+           const moisSaison = dateObj.getMonth();
+
+           return {
+             perf_nage: item.nage,
+             nageur_sexe: user.sexe,
+             perf_distance: parseInt(item.distance),
+             perf_bassin: parseInt(item.bassin),
+             mois_saison: moisSaison,
+             nageur_age_mois: ageMois,
+             perf_temps_sec: parseFloat(item.temps),
+             date: item.date
+           };
+        });
+
+        // Fusion avec l'historique existant
+        setFullHistory(prev => [...prev, ...enrichedHistory]);
+        alert(`${enrichedHistory.length} performances importées !`);
+        
+      } catch (err) {
+        console.error(err);
+        alert("Erreur lors de la lecture du fichier JSON. Vérifiez le format.");
+      }
+    };
+    reader.readAsText(file);
+    // Reset input value pour permettre de réimporter le même fichier si besoin
+    e.target.value = null; 
+  };
 
   // --- LOGIQUE FILTRAGE ---
 
@@ -95,19 +143,15 @@ export default function App() {
       h.perf_nage === selectedNage &&
       String(h.perf_distance) === String(selectedDistance) &&
       String(h.perf_bassin) === String(selectedBassin)
-    ).sort((a, b) => new Date(a.date) - new Date(b.date)); // Tri chronologique
+    ).sort((a, b) => new Date(a.date) - new Date(b.date));
   }, [fullHistory, selectedNage, selectedDistance, selectedBassin]);
 
   useEffect(() => {
-    if (predictionCache[currentDisciplineKey]) {
-      return;
-    }
-
+    if (predictionCache[currentDisciplineKey]) return;
     if (filteredHistory.length > 0) {
       predictSequence(filteredHistory, currentDisciplineKey);
     }
-
-  }, [currentDisciplineKey, filteredHistory.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentDisciplineKey, filteredHistory.length]); // eslint-disable-line
 
   // --- LOGIQUE AJOUT & PREDICTION ---
 
@@ -119,7 +163,7 @@ export default function App() {
 
     const ageMois = calculateAgeMonths(user.dob, addForm.date);
     const dateObj = new Date(addForm.date);
-    const moisSaison = dateObj.getMonth(); // 0-11
+    const moisSaison = dateObj.getMonth();
 
     const newEntry = {
       perf_nage: selectedNage,
@@ -174,37 +218,24 @@ export default function App() {
 
     } catch (err) {
       console.error("Erreur prédiction:", err);
-      setPredictionCache(prevCache => {
-        const newCache = { ...prevCache };
-        delete newCache[keyToCache];
-        return newCache;
-      });
     }
   };
 
-  // --- CHART DATA PREPARATION ---
-
+  // --- CHART DATA (Identique à avant) ---
   const getChartData = () => {
     if (!filteredHistory.length && !result) return null;
-
     const realData = filteredHistory.map(h => h.perf_temps_sec);
     const labels = filteredHistory.map(h => formatDate(h.date));
-
-    // Ajout des labels prédictifs
     const predLabels = ["Prochaine", "J+2", "J+3"];
-
     const predDataQ50 = result ? result.map(r => r.q50) : [];
     const predDataQ10 = result ? result.map(r => r.q10) : [];
     const predDataQ90 = result ? result.map(r => r.q90) : [];
-
-    // Padding pour aligner les prédictions
     const padding = Array(realData.length - 1).fill(null);
     const lastRealVal = realData[realData.length - 1] || 0;
 
     return {
       labels: [...labels, ...predLabels],
       datasets: [
-        // Index 0: Historique réel
         {
           label: "Performance Réelle",
           data: [...realData, null, null, null],
@@ -212,20 +243,15 @@ export default function App() {
           backgroundColor: "#00d4ff",
           tension: 0.2,
           pointRadius: 6,
-          pointHoverRadius: 8,
         },
-        // Index 1: Q10
         {
-          label: "Q10 (Meilleur cas)",
+          label: "Q10 (Meilleur)",
           data: [...padding, lastRealVal, ...predDataQ10],
           borderColor: "rgba(255, 0, 122, 0.3)",
-          backgroundColor: "transparent",
           borderDash: [5, 5],
           pointRadius: 4,
-          pointBackgroundColor: "rgba(255, 0, 122, 0.3)",
           fill: false,
         },
-        // Index 2: Q90
         {
           label: "Intervalle 10-90%",
           data: [...padding, lastRealVal, ...predDataQ90],
@@ -233,19 +259,15 @@ export default function App() {
           backgroundColor: "rgba(255, 0, 122, 0.15)",
           borderDash: [5, 5],
           pointRadius: 4,
-          pointBackgroundColor: "rgba(255, 0, 122, 0.3)",
           fill: 1,
         },
-        // Index 3: Q50 (Médiane)
         {
-          label: "Prédiction (Médiane)",
+          label: "Prédiction",
           data: [...padding, lastRealVal, ...predDataQ50],
           borderColor: "#ff007a",
           borderWidth: 3,
           borderDash: [2, 2],
           pointRadius: 5,
-          pointBackgroundColor: "#ff007a",
-          pointBorderColor: "#fff",
           fill: false,
         }
       ],
@@ -261,26 +283,47 @@ export default function App() {
         <h1 style={{ color: 'white' }}>🏊 SwimAI</h1>
         <UserProfile user={user} setUser={setUser} options={options} />
 
+        {/* NOUVEAU BOUTON IMPORT */}
+        <div className="card" style={{ background: 'rgba(255,255,255,0.1)', marginTop: '1rem' }}>
+          <h4>📁 Importer JSON</h4>
+          <p style={{fontSize: '0.75rem', color: '#ccc', marginBottom: '0.5rem'}}>
+            Assurez-vous que la date de naissance ci-dessus est correcte avant d'importer.
+          </p>
+          <input 
+            type="file" 
+            accept=".json" 
+            ref={fileInputRef} 
+            style={{display: 'none'}} 
+            onChange={handleJsonImport}
+          />
+          <button 
+            className="btn-primary" 
+            style={{width: '100%', fontSize: '0.8rem', background: '#333', border: '1px solid #555'}}
+            onClick={() => fileInputRef.current.click()}
+          >
+            Choisir un fichier
+          </button>
+        </div>
+
         <div className="card" style={{ marginTop: 'auto', background: 'rgba(255,255,255,0.05)' }}>
           <h3>Astuce</h3>
           <p style={{ fontSize: '0.85rem', color: '#aaa' }}>
-            Sélectionnez une épreuve ci-dessus pour voir l'historique spécifique et lancer une prédiction.
+            Sélectionnez une épreuve ci-dessus pour voir l'historique spécifique.
           </p>
         </div>
       </aside>
 
       {/* CONTENU PRINCIPAL */}
       <main className="main-content">
-
+        {/* ... (Reste du JSX identique : Tabs, Controls, Graphique, Tableau) ... */}
+        
         {/* 1. SELECTION DU CONTEXTE (ONLGETS) */}
         <div className="tabs">
           {options.perf_nage.map(nage => (
             <button
               key={nage}
               className={`tab-btn ${selectedNage === nage ? "active" : ""}`}
-              onClick={() => {
-                setSelectedNage(nage);
-              }}
+              onClick={() => { setSelectedNage(nage); }}
             >
               {nage}
             </button>
@@ -344,43 +387,25 @@ export default function App() {
               />
             ) : (
               <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666' }}>
-                Aucune donnée pour cette épreuve. Ajoutez une performance ci-dessous.
+                Aucune donnée pour cette épreuve. Ajoutez une performance manuellement ou importez un JSON.
               </div>
             )}
           </div>
         </div>
 
-        {/* 3. FORMULAIRE D'AJOUT CONTEXTUEL */}
+        {/* 3. FORMULAIRE D'AJOUT MANUEL */}
         <div className="card" style={{ borderLeft: '4px solid #00d4ff' }}>
           <h3>⏱️ Ajouter une performance</h3>
-          <p style={{ fontSize: '0.9rem', color: '#888', marginBottom: '1rem' }}>
-            Ajout pour : <b>{selectedDistance}m {selectedNage}</b> en bassin de <b>{selectedBassin}m</b>
-          </p>
-
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '1rem', alignItems: 'end' }}>
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Date de la course</label>
-              <input
-                type="date"
-                value={addForm.date}
-                onChange={(e) => setAddForm({ ...addForm, date: e.target.value })}
-              />
+              <label>Date</label>
+              <input type="date" value={addForm.date} onChange={(e) => setAddForm({ ...addForm, date: e.target.value })} />
             </div>
-
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label>Temps (secondes)</label>
-              <input
-                type="number"
-                step="0.01"
-                placeholder="Ex: 65.40"
-                value={addForm.time}
-                onChange={(e) => setAddForm({ ...addForm, time: e.target.value })}
-              />
+              <label>Temps (sec)</label>
+              <input type="number" step="0.01" value={addForm.time} onChange={(e) => setAddForm({ ...addForm, time: e.target.value })} />
             </div>
-
-            <button className="btn-primary" style={{ height: '42px' }} onClick={handleAddPerformance}>
-              Ajouter & Prédire
-            </button>
+            <button className="btn-primary" style={{ height: '42px' }} onClick={handleAddPerformance}>Ajouter</button>
           </div>
         </div>
 
@@ -400,11 +425,7 @@ export default function App() {
                 {filteredHistory.slice().reverse().map((h, i) => (
                   <tr key={i}>
                     <td>{formatDate(h.date)}</td>
-
-                    <td style={{ color: '#aaa' }}>
-                      {formatAgeReadable(h.nageur_age_mois)}
-                    </td>
-
+                    <td style={{ color: '#aaa' }}>{formatAgeReadable(h.nageur_age_mois)}</td>
                     <td style={{ color: '#fff', fontWeight: 'bold' }}>{h.perf_temps_sec} s</td>
                   </tr>
                 ))}
@@ -412,7 +433,6 @@ export default function App() {
             </table>
           </div>
         )}
-
       </main>
     </div>
   );
