@@ -13,7 +13,7 @@ from typing import List
 
 # === Model Definition ===
 class SwimLSTM(nn.Module):
-    def __init__(self, input_dim, hidden_dim=512, num_layers=2, dropout=0.2):
+    def __init__(self, input_dim, hidden_dim=128, num_layers=4, dropout=0.2):
         super().__init__()
         self.lstm = nn.LSTM(
             input_dim,
