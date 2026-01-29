@@ -74,6 +74,21 @@ def train(EPOCHS=5, BATCH_SIZE=128, TRAIN_FRACTION=0.30, VAL_FRACTION=0.30, use_
 
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     data = pd.read_csv("../data/performances_cleaned.csv")
+    
+    print(f"Données avant filtrage : {data.shape[0]} lignes")
+
+    # On définit les bornes (ici on garde ce qui est entre 0.5% et 99.5%)
+    q_low = data[TARGET_COL].quantile(0.001)
+    q_high = data[TARGET_COL].quantile(0.999)
+
+    # On filtre
+    data_filtered = data[(data[TARGET_COL] > q_low) & (data[TARGET_COL] < q_high)]
+    
+    removed_count = data.shape[0] - data_filtered.shape[0]
+    data = data_filtered
+    
+    print(f"Seuils appliqués : < {q_low:.2f}s et > {q_high:.2f}s")
+    print(f"Données après filtrage : {data.shape[0]} lignes ({removed_count} supprimées)")
 
     # ---------------- split by swimmers ------------- #
     nageurs = np.random.permutation(data["nageur_id"].unique())
