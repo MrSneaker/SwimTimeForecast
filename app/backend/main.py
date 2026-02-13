@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 from typing import List
 
+from src.SwimTFT import SwimTFT
+
 
 # === Model Definition ===
 class SwimLSTM(nn.Module):
@@ -31,7 +33,7 @@ class SwimLSTM(nn.Module):
 
 # === Config ===
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-SEQ_LEN = 10
+SEQ_LEN = 20
 FEATURE_COLS = ["perf_temps_sec","nageur_age_mois_scaled","perf_nage_encoded",
              "perf_distance_encoded","perf_bassin_encoded","mois_saison_sin",
              "mois_saison_cos","nageur_sexe_encoded"]
@@ -48,12 +50,6 @@ LE_SEXE_PATH = os.path.join(MODEL_DIR, "encoder_sexe.pkl")
 LE_DISTANCE_PATH = os.path.join(MODEL_DIR, "encoder_perf_distance.pkl")
 LE_BASSIN_PATH = os.path.join(MODEL_DIR, "encoder_perf_bassin.pkl")
 SCALER_AGE_PATH = os.path.join(MODEL_DIR, "scaler_age.pkl")
-
-# === Load model & scaler ===
-model = SwimLSTM(input_dim=len(FEATURE_COLS))
-model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
-model.to(DEVICE)
-model.eval()
 
 with open(SCALER_PATH, "rb") as f:
     scaler_y = pickle.load(f)
@@ -115,13 +111,17 @@ def get_options():
             "Juillet","Août","Septembre","Octobre","Novembre","Décembre"
         ]
     }
-    
-    
+
+# === Load model V3 ===
+model = SwimTFT(input_dim=len(FEATURE_COLS), hidden_dim=256, num_layers=4, n_heads=8, dropout=0.3)
+model.load_state_dict(torch.load(os.path.join(MODEL_DIR, "swim_tft_v3.pt"), map_location=DEVICE))
+model.to(DEVICE).eval()
+
 @app.post("/predict_seq")
 def predict_seq(input_data: SwimSequenceInputReadable):
     seq = pad_sequence(input_data.sequence, SEQ_LEN)
-
     df = pd.DataFrame([item.model_dump() for item in seq])
+    
     df["perf_nage_encoded"] = le_nage.transform(df["perf_nage"])
     df["nageur_sexe_encoded"] = le_sexe.transform(df["nageur_sexe"])
     df["perf_distance_encoded"] = le_distance.transform(df["perf_distance"])
@@ -130,27 +130,30 @@ def predict_seq(input_data: SwimSequenceInputReadable):
     sin_cos = df["mois_saison"].apply(month_to_sin_cos)
     df["mois_saison_sin"] = [s for s,c in sin_cos]
     df["mois_saison_cos"] = [c for s,c in sin_cos]
-
-    # Scaler target
     df["perf_temps_sec"] = scaler_y.transform(df[["perf_temps_sec"]])
 
-    # Input tensor
     X = torch.tensor(df[FEATURE_COLS].values[None, :, :], dtype=torch.float32).to(DEVICE)
 
     with torch.no_grad():
-        preds = model(X).cpu().numpy()
+        # Le TFT renvoie : (predictions, feature_weights, attention_weights)
+        preds, feat_weights, _ = model(X)
+        preds = preds.cpu().numpy() # Shape: (1, Horizon, 3)
+        feat_weights = feat_weights.cpu().numpy().squeeze() # Shape: (8,)
 
-    print("Raw predictions (scaled):", preds)
+    # Préparation de la réponse Multi-Horizon (3 étapes d'un coup)
+    horizons = []
+    for h in range(preds.shape[1]):
+        q10 = scaler_y.inverse_transform(preds[0, h, 0:1].reshape(-1, 1)).item()
+        q50 = scaler_y.inverse_transform(preds[0, h, 1:2].reshape(-1, 1)).item()
+        q90 = scaler_y.inverse_transform(preds[0, h, 2:3].reshape(-1, 1)).item()
+        horizons.append({"q10": q10, "q50": q50, "q90": q90})
 
-    q10 = scaler_y.inverse_transform(preds[:, 0:1]).squeeze()
-    q50 = scaler_y.inverse_transform(preds[:, 1:2]).squeeze()
-    q90 = scaler_y.inverse_transform(preds[:, 2:3]).squeeze()
-    preds_sec = {
-        "q10": float(q10),
-        "q50": float(q50),
-        "q90": float(q90)
+    print(f'feat_weights: {feat_weights}') # Debug : Affiche les poids d'importance des features
+    # On renvoie aussi l'importance des variables pour le front
+    feat_weights_avg = feat_weights.mean(axis=0)
+    importances = {FEATURE_COLS[i]: float(feat_weights_avg[i]) for i in range(len(FEATURE_COLS))}
+
+    return {
+        "predictions": horizons,
+        "feature_importance": importances
     }
-    
-    print("Predictions (sec):", preds_sec)
-
-    return preds_sec

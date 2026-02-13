@@ -7,13 +7,12 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from .train import SwimLSTM                
-from .custom_dataloader import SwimDataset    
+from .custom_dataloader import SwimDataset, SwimDatasetTFT    
 
 import os
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-SEQ_LEN = 10
 BATCH_SIZE = 128
 TARGET_COL = "perf_temps_sec"
 
@@ -27,9 +26,19 @@ FEATURE_COLS = [
 # =============================================================
 #  TEST FUNCTION
 # =============================================================
-def test(save_figures=True, show_figures=True):
+def test(save_figures=True, show_figures=True, model_version="v3"):
     import datetime
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+    
+    # --- Configuration par version ---
+    if model_version.lower() == "v3":
+        SEQ_LEN = 20
+        HORIZON = 3
+        print(f"\nTEST MODE SELECTED | VERSION: {model_version.upper()} (TFT Multi-Horizon)")
+    else:
+        SEQ_LEN = 10
+        HORIZON = 1
+        print(f"\nTEST MODE SELECTED | VERSION: {model_version.upper()}")
 
     # Create result directory
     result_dir = "../model_result"
@@ -51,13 +60,19 @@ def test(save_figures=True, show_figures=True):
     test_df[TARGET_COL] = scaler_y.transform(test_df[[TARGET_COL]])
 
     # Keep only long series
-    min_len = SEQ_LEN + 1
+    min_len = SEQ_LEN + HORIZON
     valid_series = test_df.groupby("series_id").size()
     valid_series = valid_series[valid_series >= min_len].index
     test_df = test_df[test_df["series_id"].isin(valid_series)]
 
+    if model_version.lower() == "v3":
+        # For TFT, we need to generate multi-horizon sequences
+        test_dataset = SwimDatasetTFT(test_df, seq_len=SEQ_LEN, feature_cols=FEATURE_COLS, horizon=3)
+    else:
+        test_dataset = SwimDataset(test_df, seq_len=SEQ_LEN, feature_cols=FEATURE_COLS)
+        
     test_loader = DataLoader(
-        SwimDataset(test_df, SEQ_LEN, FEATURE_COLS),
+        test_dataset,
         batch_size=BATCH_SIZE, 
         shuffle=False, 
         num_workers=4,
@@ -65,22 +80,56 @@ def test(save_figures=True, show_figures=True):
     )
 
     # ------------------ Load Model ------------------ #
-    model = SwimLSTM(input_dim=len(FEATURE_COLS), hidden_dim=128, num_layers=4, dropout=0.49726187436364466).to(DEVICE)
-    model.load_state_dict(torch.load("../models/swim_lstm.pt", map_location=DEVICE))
+    if model_version.lower() == "v1":
+        model_path = "../models/swim_lstm.pt"
+    elif model_version.lower() == "v2":
+        model_path = "../models/swim_attention_v2.pt"
+    elif model_version.lower() == "v3":
+        model_path = "../models/swim_tft_v3.pt"
+    else:
+        raise ValueError(f"Invalid model version: {model_version}. Choose from 'v1', 'v2', 'v3'.")
+    if model_version.lower() == "v3":
+        from .SwimTFT import SwimTFT
+        model = SwimTFT(input_dim=len(FEATURE_COLS), hidden_dim=256, num_layers=4, dropout=0.2, n_heads=4).to(DEVICE)
+    elif model_version.lower() == "v2":
+        from .train import SwimAttention
+        model = SwimAttention(input_dim=len(FEATURE_COLS), hidden_dim=128, num_layers=4, dropout=0.2, n_heads=4).to(DEVICE)
+    else:
+        model = SwimLSTM(input_dim=len(FEATURE_COLS), hidden_dim=128, num_layers=4, dropout=0.49726187436364466).to(DEVICE)
+    model.load_state_dict(torch.load(model_path, map_location=DEVICE))
     model.eval()
 
     print("\nModel loaded and ready for inference.\n")
 
     preds_list, trues_list = [], []
+    
+    # Pour l'explicabilité (V3 seulement)
+    importances_list = []
 
     # ------------------ Inference ------------------ #
     with torch.no_grad():
         for X_batch, y_batch in tqdm(test_loader, desc="Testing"):
             X_batch = X_batch.to(DEVICE)
-            pred = model(X_batch).cpu().numpy()
+            if model_version.lower() == "v3":
+                # TFT returns: pred, feat_weights, attn_weights
+                pred_full, feat_weights, _ = model(X_batch)
+
+                # POUR LE TEST : On prend uniquement le premier horizon (t+1)
+                # pour pouvoir comparer avec V1/V2 et tracer des graphes 1D
+                pred = pred_full[:, 0, :] # [Batch, 3] (Quantiles du t+1)
+                y_target = y_batch[:, 0]  # [Batch] (Vraie valeur t+1)
+                
+                # On stocke l'importance moyenne des features pour ce batch
+                importances_list.append(feat_weights.mean(dim=(0,1)).cpu().numpy())
+                
+                pred = pred.cpu().numpy()
+                y_target = y_target.numpy()
+            else:
+                pred = model(X_batch).cpu().numpy()
+                y_target = y_batch.numpy()
 
             preds_list.append(pred)
-            trues_list.append(y_batch.numpy())
+            trues_list.append(y_target)
 
     preds = np.vstack(preds_list)
     trues = np.concatenate(trues_list)
@@ -107,11 +156,23 @@ def test(save_figures=True, show_figures=True):
     pb90 = pinball(true, q90, 0.90)
 
     coverage = np.mean((true >= q10) & (true <= q90)) * 100
-    winkler = np.mean((q90-q10) + (2/0.8)*np.maximum(q10-true,0) + (2/0.8)*np.maximum(true-q90,0))
+    
+    # Winkler Score (pénalise si l'intervalle est trop large ou si ça sort)
+    width = q90 - q10
+    # Si true < q10 (trop bas)
+    under = (q10 - true) * (true < q10)
+    # Si true > q90 (trop haut)
+    over = (true - q90) * (true > q90)
+    alpha = 0.1 # (1 - 0.9)
+    winkler = np.mean(width + (2/alpha)*under + (2/alpha)*over)
+    
+    # MAPE (Mean Absolute Percentage Error)
+    mape = np.mean(np.abs((true - q50) / true)) * 100
 
     print("\n===== Test Metrics =====")
     print(f"MAE:          {mae:.4f}")
     print(f"RMSE:         {rmse:.4f}")
+    print(f"MAPE:         {mape:.2f} %")
     print(f"Pinball q10:  {pb10:.4f}")
     print(f"Pinball q50:  {pb50:.4f}")
     print(f"Pinball q90:  {pb90:.4f}")
@@ -134,6 +195,30 @@ def test(save_figures=True, show_figures=True):
 
     print(stats.round(4), "\n")
 
+    # ------------------ V3 Feature Importance ------------------ #
+    if model_version.lower() == "v3" and importances_list:
+        avg_imp = np.mean(np.vstack(importances_list), axis=0)
+        # Création d'un DataFrame pour l'affichage
+        imp_df = pd.DataFrame({
+            "Feature": FEATURE_COLS,
+            "Importance": avg_imp
+        }).sort_values(by="Importance", ascending=False)
+        
+        print("\n===== Global Feature Importance (TFT) =====")
+        print(imp_df)
+        print("===========================================\n")
+        
+        # Plot Feature Importance
+        fig = plt.figure(figsize=(10, 6))
+        plt.barh(imp_df["Feature"], imp_df["Importance"], color='skyblue')
+        plt.xlabel("Importance moyenne")
+        plt.title("TFT - Quelles variables comptent le plus ?")
+        plt.gca().invert_yaxis() # Meilleure feature en haut
+        plt.grid(axis='x', linestyle='--', alpha=0.7)
+        path = f"{result_dir}/{timestamp}_feature_importance.png"
+        if save_figures: fig.savefig(path, bbox_inches="tight")
+        if show_figures: plt.show()
+        plt.close(fig)
 
     # ------------------ PLOTTING & SAVING ------------------ #
 
