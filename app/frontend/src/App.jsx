@@ -55,7 +55,7 @@ const UserProfile = ({ user, setUser, options }) => {
 
 export default function App() {
   const [options, setOptions] = useState(null);
-  
+
   // Référence pour l'input file caché
   const fileInputRef = useRef(null);
 
@@ -81,7 +81,7 @@ export default function App() {
     return `${selectedNage}-${selectedDistance}-${selectedBassin}`;
   }, [selectedNage, selectedDistance, selectedBassin]);
 
-  const result = predictionCache[currentDisciplineKey] || null;
+  const results = predictionCache[currentDisciplineKey] || null;
 
   useEffect(() => {
     axios.get("http://localhost:8000/options").then((res) => {
@@ -100,32 +100,32 @@ export default function App() {
     reader.onload = (event) => {
       try {
         const jsonData = JSON.parse(event.target.result);
-        
+
         // Validation basique et transformation
         if (!Array.isArray(jsonData)) throw new Error("Le format doit être un tableau JSON");
 
         const enrichedHistory = jsonData.map(item => {
-           // Calculs dérivés basés sur le profil actuel
-           const ageMois = calculateAgeMonths(user.dob, item.date);
-           const dateObj = new Date(item.date);
-           const moisSaison = dateObj.getMonth();
+          // Calculs dérivés basés sur le profil actuel
+          const ageMois = calculateAgeMonths(user.dob, item.date);
+          const dateObj = new Date(item.date);
+          const moisSaison = dateObj.getMonth();
 
-           return {
-             perf_nage: item.nage,
-             nageur_sexe: user.sexe,
-             perf_distance: parseInt(item.distance),
-             perf_bassin: parseInt(item.bassin),
-             mois_saison: moisSaison,
-             nageur_age_mois: ageMois,
-             perf_temps_sec: parseFloat(item.temps),
-             date: item.date
-           };
+          return {
+            perf_nage: item.nage,
+            nageur_sexe: user.sexe,
+            perf_distance: parseInt(item.distance),
+            perf_bassin: parseInt(item.bassin),
+            mois_saison: moisSaison,
+            nageur_age_mois: ageMois,
+            perf_temps_sec: parseFloat(item.temps),
+            date: item.date
+          };
         });
 
         // Fusion avec l'historique existant
         setFullHistory(prev => [...prev, ...enrichedHistory]);
         alert(`${enrichedHistory.length} performances importées !`);
-        
+
       } catch (err) {
         console.error(err);
         alert("Erreur lors de la lecture du fichier JSON. Vérifiez le format.");
@@ -133,7 +133,7 @@ export default function App() {
     };
     reader.readAsText(file);
     // Reset input value pour permettre de réimporter le même fichier si besoin
-    e.target.value = null; 
+    e.target.value = null;
   };
 
   // --- LOGIQUE FILTRAGE ---
@@ -186,50 +186,102 @@ export default function App() {
   const predictSequence = async (sequenceData, keyToCache) => {
     if (sequenceData.length === 0) return;
 
-    let currentSequence = [...sequenceData];
-    const steps = 3;
-    const multiPredictionResult = [];
-
     try {
-      for (let i = 0; i < steps; i++) {
-        const res = await axios.post("http://localhost:8000/predict_seq", {
-          sequence: currentSequence,
-        });
-
-        const pred = res.data;
-        multiPredictionResult.push(pred);
-
-        const lastItem = currentSequence[currentSequence.length - 1];
-        currentSequence = [
-          ...currentSequence,
-          {
-            ...lastItem,
-            perf_temps_sec: pred.q50,
-            nageur_age_mois: lastItem.nageur_age_mois + 1,
-            mois_saison: (lastItem.mois_saison + 1) % 12
-          },
-        ];
-      }
+      const res = await axios.post("http://localhost:8000/predict_seq", {
+        sequence: sequenceData,
+      });
 
       setPredictionCache(prevCache => ({
         ...prevCache,
-        [keyToCache]: multiPredictionResult,
+        [keyToCache]: {
+          predictions: res.data.predictions, // Tableau de 3 objets {q10, q50, q90}
+          importance: res.data.feature_importance
+        },
       }));
-
     } catch (err) {
       console.error("Erreur prédiction:", err);
     }
   };
 
-  // --- CHART DATA (Identique à avant) ---
+  const ImportanceWidget = ({ importance }) => {
+    if (!importance) return null;
+
+    const featToLabel = {
+      "perf_temps_sec": "Chronos précédents",
+      "nageur_age_mois_scaled": "Âge & Croissance",
+      "nageur_sexe_encoded": "Genre",
+      "perf_distance_encoded": "Distance de l'épreuve",
+      "perf_bassin_encoded": "Taille du bassin",
+      "perf_nage_encoded": "Type de nage"
+    };
+
+    const processedImportance = () => {
+      const entries = Object.entries(importance);
+      const result = {};
+      let saisonSum = 0;
+
+      entries.forEach(([key, val]) => {
+        if (key === 'mois_saison_sin' || key === 'mois_saison_cos') {
+          saisonSum += val;
+        } else {
+          result[key] = val;
+        }
+      });
+
+      // On ajoute l'entrée unique pour la saison
+      result['saison_grouped'] = saisonSum;
+      return Object.entries(result);
+    };
+
+    // On trie par importance décroissante
+    const sorted = processedImportance()
+      .sort(([, a], [, b]) => b - a);
+
+    return (
+      <div className="card" style={{ background: '#1a1a1a' }}>
+        <h4>🧠 Pourquoi cette prédiction ?</h4>
+        <h5 style={{ color: '#ccc', marginBottom: '10px', fontSize: '0.85rem' }}>
+          Facteurs d'influence identifiés par l'IA :
+        </h5>
+        <div style={{ marginTop: '10px' }}>
+          {sorted.map(([key, val]) => (
+            <div key={key} style={{ marginBottom: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
+                <span style={{ color: '#aaa' }}>
+                  {key === 'saison_grouped' ? "Saisonnalité" : (featToLabel[key] || key)}
+                </span>
+                <span style={{ color: '#00d4ff', fontWeight: 'bold' }}>
+                  {(val * 100).toFixed(1)}%
+                </span>
+              </div>
+              <div style={{ height: '6px', background: '#333', borderRadius: '3px', marginTop: '6px' }}>
+                <div
+                  style={{
+                    width: `${val * 100}%`,
+                    height: '100%',
+                    background: 'linear-gradient(90deg, #005f73, #00d4ff)',
+                    borderRadius: '3px',
+                    transition: 'width 0.5s ease-out'
+                  }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // --- CHART DATA ---
   const getChartData = () => {
-    if (!filteredHistory.length && !result) return null;
+    if (!filteredHistory.length && !results) return null;
     const realData = filteredHistory.map(h => h.perf_temps_sec);
     const labels = filteredHistory.map(h => formatDate(h.date));
     const predLabels = ["Prochaine", "J+2", "J+3"];
-    const predDataQ50 = result ? result.map(r => r.q50) : [];
-    const predDataQ10 = result ? result.map(r => r.q10) : [];
-    const predDataQ90 = result ? result.map(r => r.q90) : [];
+    console.log('results:', results);
+    const predDataQ50 = results ? results.predictions.map(r => r.q50) : [];
+    const predDataQ10 = results ? results.predictions.map(r => r.q10) : [];
+    const predDataQ90 = results ? results.predictions.map(r => r.q90) : [];
     const padding = Array(realData.length - 1).fill(null);
     const lastRealVal = realData[realData.length - 1] || 0;
 
@@ -283,22 +335,21 @@ export default function App() {
         <h1 style={{ color: 'white' }}>🏊 SwimAI</h1>
         <UserProfile user={user} setUser={setUser} options={options} />
 
-        {/* NOUVEAU BOUTON IMPORT */}
         <div className="card" style={{ background: 'rgba(255,255,255,0.1)', marginTop: '1rem' }}>
           <h4>📁 Importer JSON</h4>
-          <p style={{fontSize: '0.75rem', color: '#ccc', marginBottom: '0.5rem'}}>
+          <p style={{ fontSize: '0.75rem', color: '#ccc', marginBottom: '0.5rem' }}>
             Assurez-vous que la date de naissance ci-dessus est correcte avant d'importer.
           </p>
-          <input 
-            type="file" 
-            accept=".json" 
-            ref={fileInputRef} 
-            style={{display: 'none'}} 
+          <input
+            type="file"
+            accept=".json"
+            ref={fileInputRef}
+            style={{ display: 'none' }}
             onChange={handleJsonImport}
           />
-          <button 
-            className="btn-primary" 
-            style={{width: '100%', fontSize: '0.8rem', background: '#333', border: '1px solid #555'}}
+          <button
+            className="btn-primary"
+            style={{ width: '100%', fontSize: '0.8rem', background: '#333', border: '1px solid #555' }}
             onClick={() => fileInputRef.current.click()}
           >
             Choisir un fichier
@@ -315,8 +366,6 @@ export default function App() {
 
       {/* CONTENU PRINCIPAL */}
       <main className="main-content">
-        {/* ... (Reste du JSX identique : Tabs, Controls, Graphique, Tableau) ... */}
-        
         {/* 1. SELECTION DU CONTEXTE (ONLGETS) */}
         <div className="tabs">
           {options.perf_nage.map(nage => (
@@ -354,21 +403,25 @@ export default function App() {
             )}
           </div>
 
-          {result && (
-            <div className="prediction-stats">
-              <div className="stat-box">
-                <div className="stat-value">{result[0].q10.toFixed(2)}s</div>
-                <div className="stat-label">Best Case (Q10)</div>
+          {results && (
+            <>
+              <div className="prediction-stats">
+                <div className="stat-box">
+                  <div className="stat-value">{results.predictions[0].q10.toFixed(2)}s</div>
+                  <div className="stat-label">Best Case (Q10)</div>
+                </div>
+                <div className="stat-box">
+                  <div className="stat-value" style={{ color: '#fff' }}>{results.predictions[0].q50.toFixed(2)}s</div>
+                  <div className="stat-label">Attendu (Moyenne)</div>
+                </div>
+                <div className="stat-box">
+                  <div className="stat-value">{results.predictions[0].q90.toFixed(2)}s</div>
+                  <div className="stat-label">Worst Case (Q90)</div>
+                </div>
               </div>
-              <div className="stat-box">
-                <div className="stat-value" style={{ color: '#fff' }}>{result[0].q50.toFixed(2)}s</div>
-                <div className="stat-label">Attendu (Moyenne)</div>
-              </div>
-              <div className="stat-box">
-                <div className="stat-value">{result[0].q90.toFixed(2)}s</div>
-                <div className="stat-label">Worst Case (Q90)</div>
-              </div>
-            </div>
+
+              <ImportanceWidget importance={results.importance} />
+            </>
           )}
 
           <div style={{ height: "300px", width: "100%" }}>
