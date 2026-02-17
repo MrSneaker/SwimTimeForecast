@@ -145,7 +145,7 @@ def test(save_figures=True, show_figures=True, model_version="v3"):
     q90 = np.maximum(q90, q50)
 
     # ------------------ Metrics ------------------ #
-    def pinball(y, q, alpha):
+    def pinball(y, q, alpha): # équivaut à la quantile loss
         return np.mean(np.maximum(alpha*(y-q), (alpha-1)*(y-q)))
 
     mae = np.mean(np.abs(q50 - true))
@@ -163,7 +163,7 @@ def test(save_figures=True, show_figures=True, model_version="v3"):
     under = (q10 - true) * (true < q10)
     # Si true > q90 (trop haut)
     over = (true - q90) * (true > q90)
-    alpha = 0.1 # (1 - 0.9)
+    alpha = 0.2 # (1 - 0.8) pour notre intervalle 10-90
     winkler = np.mean(width + (2/alpha)*under + (2/alpha)*over)
     
     # MAPE (Mean Absolute Percentage Error)
