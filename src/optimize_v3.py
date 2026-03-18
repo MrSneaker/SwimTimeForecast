@@ -4,9 +4,9 @@ import os
 import sys
 
 try:
-    from .train import load_and_prep_data, run_training, FEATURE_COLS
+    from .train_v3 import load_and_prep_data, run_training, FEATURE_COLS
 except ImportError:
-    from train import load_and_prep_data, run_training, FEATURE_COLS
+    from train_v3 import load_and_prep_data, run_training, FEATURE_COLS
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
