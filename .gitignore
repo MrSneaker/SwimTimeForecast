@@ -2,3 +2,4 @@ data/*
 logs/*
 pids/*
 __pycache__/
+.vscode/
