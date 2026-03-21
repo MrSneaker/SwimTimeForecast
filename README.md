@@ -1,6 +1,6 @@
-# FFNBoardProject
+# SwimTimeForecast
 
-Projet combinant un backend FastAPI pour le traitement des données et un frontend React pour l'affichage.
+Système de prédiction des temps de nage basé sur l’architecture Temporal Fusion Transformer (TFT), un modèle de deep learning pour séries temporelles permettant le forecasting multi-horizon et l’estimation d’incertitude via des prédictions quantiles, tout en offrant une explicabilité partielle grâce aux mécanismes d’attention et aux réseaux de sélection de variables (Variable Selection Networks). Le tout est exposé via FastAPI et une interface React de visualisation.
 
 ## Arborescence du projet
 
