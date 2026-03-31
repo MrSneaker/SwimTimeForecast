@@ -1,4 +1,5 @@
 import pickle
+from sympy import use
 import torch
 import numpy as np
 import pandas as pd
@@ -6,7 +7,7 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .train import SwimLSTM                
+from .train import SwimAttention, SwimLSTM                
 from .custom_dataloader import SwimDataset, SwimDatasetTFT    
 
 import os
@@ -19,19 +20,28 @@ TARGET_COL = "perf_temps_sec"
 FEATURE_COLS = [
     "perf_temps_sec","nageur_age_mois_scaled","perf_nage_encoded",
     "perf_distance_encoded","perf_bassin_encoded","mois_saison_sin",
-    "mois_saison_cos","nageur_sexe_encoded"
+    "mois_saison_cos","nageur_sexe_encoded", "days_since_last_log"
 ]
 
+PAST_COLS = ["perf_temps_sec", "days_since_last_log", "perf_nage_encoded"]
+# La présence de "age" dans les features futures est discutable, mais on peut laisser pour voir si le modèle l'utilise
+FUTURE_COLS = [
+    "mois_saison_sin", "mois_saison_cos", 
+    "perf_distance_encoded", "perf_bassin_encoded", 
+    "nageur_age_mois_scaled"
+]
+STATIC_COLS = ["nageur_sexe_encoded"]
 
 # =============================================================
 #  TEST FUNCTION
 # =============================================================
-def test(save_figures=True, show_figures=True, model_version="v3"):
+
+def test(save_figures=True, show_figures=True, model_version="v4", use_optimized=False):
     import datetime
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
     
     # --- Configuration par version ---
-    if model_version.lower() == "v3":
+    if model_version.lower() in ["v3", "v4"]:
         SEQ_LEN = 20
         HORIZON = 3
         print(f"\nTEST MODE SELECTED | VERSION: {model_version.upper()} (TFT Multi-Horizon)")
@@ -40,14 +50,14 @@ def test(save_figures=True, show_figures=True, model_version="v3"):
         HORIZON = 1
         print(f"\nTEST MODE SELECTED | VERSION: {model_version.upper()}")
 
-    # Create result directory
+    # Dossier de résultats
     result_dir = "../model_result"
     os.makedirs(result_dir, exist_ok=True)
 
-    print("\nTEST MODE SELECTED\n")
-
     # ------------------ Load dataset ------------------ #
     test_csv_path = "../data/test_data/test_df.csv"
+    if model_version.lower() == "v4":
+        test_csv_path = "../data/test_data/test_df_v4.csv"
     if not os.path.exists(test_csv_path):
         raise FileNotFoundError(f"Saved test data not found: {test_csv_path}")
 
@@ -59,91 +69,127 @@ def test(save_figures=True, show_figures=True, model_version="v3"):
         scaler_y = pickle.load(f)
     test_df[TARGET_COL] = scaler_y.transform(test_df[[TARGET_COL]])
 
-    # Keep only long series
+    # Filtrage séries longues
     min_len = SEQ_LEN + HORIZON
     valid_series = test_df.groupby("series_id").size()
     valid_series = valid_series[valid_series >= min_len].index
     test_df = test_df[test_df["series_id"].isin(valid_series)]
 
-    if model_version.lower() == "v3":
-        # For TFT, we need to generate multi-horizon sequences
-        test_dataset = SwimDatasetTFT(test_df, seq_len=SEQ_LEN, feature_cols=FEATURE_COLS, horizon=3)
+    # Choix du Dataset
+    if model_version.lower() == "v4":
+        from .custom_dataloader import SwimDatasetTFTV2
+        test_dataset = SwimDatasetTFTV2(test_df, past_cols=PAST_COLS, future_cols=FUTURE_COLS, static_cols=STATIC_COLS, target_col=TARGET_COL, seq_len=SEQ_LEN, horizon=HORIZON)
+    elif model_version.lower() == "v3":
+        test_dataset = SwimDatasetTFT(test_df, seq_len=SEQ_LEN, feature_cols=FEATURE_COLS, horizon=HORIZON)
     else:
         test_dataset = SwimDataset(test_df, seq_len=SEQ_LEN, feature_cols=FEATURE_COLS)
         
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=BATCH_SIZE, 
-        shuffle=False, 
-        num_workers=4,
-        pin_memory=True
-    )
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, pin_memory=True)
 
     # ------------------ Load Model ------------------ #
-    if model_version.lower() == "v1":
+    if model_version.lower() == "v4":
+        from .SwimTFTv2 import TemporalFusionTransformer
+        model_path = "../models/swim_tft_v4_best.pt"
+        params = {
+            "batch_size": BATCH_SIZE,
+            "hidden_dim": 256,
+            "lr": 5e-4,
+            "dropout": 0.3,
+            "n_heads": 8,
+            "seq_len": 20,
+            "horizon": 3
+        }
+        
+        if use_optimized:
+            try:
+                with open("../models/best_params_v4.json", "r") as f:
+                    import json
+                    params.update(json.load(f))
+            except FileNotFoundError:
+                print("Best parameters file not found. Using default parameters.")
+        
+        model = TemporalFusionTransformer(
+            number_of_past_inputs=SEQ_LEN,
+            horizon=params["horizon"],
+            embedding_size_inputs=1,
+            hidden_dimension=params["hidden_dim"],
+            dropout=params["dropout"],
+            number_of_heads=params["n_heads"],
+            past_inputs={c: 1 for c in PAST_COLS},
+            future_inputs={c: 1 for c in FUTURE_COLS},
+            static_inputs={c: 1 for c in STATIC_COLS},
+            batch_size=params["batch_size"],
+            device=DEVICE,
+            quantiles=[0.1, 0.5, 0.9]
+        ).to(DEVICE)
+    elif model_version.lower() == "v3":
+        from .SwimTFT import SwimTFT
+        model_path = "../models/swim_tft_v3.pt"
+        model = SwimTFT(input_dim=len(FEATURE_COLS), hidden_dim=256, num_layers=4, dropout=0.2, n_heads=4).to(DEVICE)
+    elif model_version.lower() == "v1":
         model_path = "../models/swim_lstm.pt"
+        model = SwimLSTM(input_dim=len(FEATURE_COLS), hidden_dim=128, num_layers=4, dropout=0.49726187436364466).to(DEVICE)
     elif model_version.lower() == "v2":
         model_path = "../models/swim_attention_v2.pt"
-    elif model_version.lower() == "v3":
-        model_path = "../models/swim_tft_v3.pt"
-    else:
-        raise ValueError(f"Invalid model version: {model_version}. Choose from 'v1', 'v2', 'v3'.")
-    if model_version.lower() == "v3":
-        from .SwimTFT import SwimTFT
-        model = SwimTFT(input_dim=len(FEATURE_COLS), hidden_dim=256, num_layers=4, dropout=0.2, n_heads=4).to(DEVICE)
-    elif model_version.lower() == "v2":
-        from .train import SwimAttention
         model = SwimAttention(input_dim=len(FEATURE_COLS), hidden_dim=128, num_layers=4, dropout=0.2, n_heads=4).to(DEVICE)
-    else:
-        model = SwimLSTM(input_dim=len(FEATURE_COLS), hidden_dim=128, num_layers=4, dropout=0.49726187436364466).to(DEVICE)
+
     model.load_state_dict(torch.load(model_path, map_location=DEVICE))
     model.eval()
-
-    print("\nModel loaded and ready for inference.\n")
+    print(f"\nModel {model_version} loaded and ready.\n")
 
     preds_list, trues_list = [], []
-    
-    # Pour l'explicabilité (V3 seulement)
     importances_list = []
 
     # ------------------ Inference ------------------ #
     with torch.no_grad():
-        for X_batch, y_batch in tqdm(test_loader, desc="Testing"):
-            X_batch = X_batch.to(DEVICE)
-            if model_version.lower() == "v3":
-                # TFT returns: pred, feat_weights, attn_weights
-                pred_full, feat_weights, _ = model(X_batch)
+        for batch_data, y_batch in tqdm(test_loader, desc=f"Testing {model_version}"):
+            
+            if model_version.lower() == "v4":
+                past_dicts = {k: v.to(DEVICE) for k, v in batch_data['past'].items()}
+                future_dicts = {k: v.to(DEVICE) for k, v in batch_data['future'].items()}
+                static_dicts = {k: v.to(DEVICE) for k, v in batch_data['static'].items()}
+                
+                # Output V4: [Batch, Horizon, 1, Quantiles]
+                pred_full, feat_weights = model(past_inputs=past_dicts, future_inputs=future_dicts, static_inputs=static_dicts)
+                
+                # On squeeze la dimension "target_dimension" (1) -> [Batch, Horizon, Quantiles]
+                pred_full = pred_full.squeeze(2)
+                
+                # On prend l'horizon t+1 pour les métriques globales et les graphes
+                pred = pred_full[:, 0, :].cpu().numpy() # [Batch, 3 quantiles]
+                y_target = y_batch[:, 0].numpy()        # [Batch]
+                
+                if isinstance(feat_weights, dict):
+                    importances_list.append(feat_weights['past'].mean(dim=(0,1)).cpu().numpy())
 
-                # POUR LE TEST : On prend uniquement le premier horizon (t+1)
-                # pour pouvoir comparer avec V1/V2 et tracer des graphes 1D
-                pred = pred_full[:, 0, :] # [Batch, 3] (Quantiles du t+1)
-                y_target = y_batch[:, 0]  # [Batch] (Vraie valeur t+1)
-                
-                # On stocke l'importance moyenne des features pour ce batch
+            elif model_version.lower() == "v3":
+                X_batch = batch_data.to(DEVICE)
+                pred_full, feat_weights, _ = model(X_batch)
+                pred = pred_full[:, 0, :].cpu().numpy()
+                y_target = y_batch[:, 0].numpy()
                 importances_list.append(feat_weights.mean(dim=(0,1)).cpu().numpy())
-                
-                pred = pred.cpu().numpy()
-                y_target = y_target.numpy()
             else:
+                X_batch = batch_data.to(DEVICE)
                 pred = model(X_batch).cpu().numpy()
                 y_target = y_batch.numpy()
 
             preds_list.append(pred)
             trues_list.append(y_target)
 
-    preds = np.vstack(preds_list)
+    # ------------------ Post-Processing & Metrics ------------------ #
+    preds = np.vstack(preds_list) # [N, 3]
     trues = np.concatenate(trues_list)
 
-    # Inverse scale
+    # Inverse scale (sur le premier horizon pour la comparaison)
     q10 = scaler_y.inverse_transform(preds[:, 0:1]).squeeze()
     q50 = scaler_y.inverse_transform(preds[:, 1:2]).squeeze()
     q90 = scaler_y.inverse_transform(preds[:, 2:3]).squeeze()
     true = scaler_y.inverse_transform(trues.reshape(-1, 1)).squeeze()
 
-    # Safety for quantile crossing
+    # Correction croisement quantiles
     q10 = np.minimum(q10, q50)
     q90 = np.maximum(q90, q50)
-
+    
     # ------------------ Metrics ------------------ #
     def pinball(y, q, alpha): # équivaut à la quantile loss
         return np.mean(np.maximum(alpha*(y-q), (alpha-1)*(y-q)))
@@ -219,7 +265,31 @@ def test(save_figures=True, show_figures=True, model_version="v3"):
         if save_figures: fig.savefig(path, bbox_inches="tight")
         if show_figures: plt.show()
         plt.close(fig)
+    if model_version.lower() == "v4" and importances_list:
+        avg_imp = np.mean(np.vstack(importances_list), axis=0)
+        importances_brutes = {col: float(avg_imp[i]) for i, col in enumerate(PAST_COLS)}
+        total = sum(importances_brutes.values()) + 1e-8
+        importances_finales = {k: v / total for k, v in importances_brutes.items()}
 
+        imp_df = pd.DataFrame({
+            "Feature": list(importances_finales.keys()),
+            "Importance": list(importances_finales.values())
+        }).sort_values(by="Importance", ascending=False)
+        
+        print("\n===== Global Feature Importance (TFT V4) =====")
+        print(imp_df)
+        print("==============================================\n")
+        
+        fig = plt.figure(figsize=(10, 6))
+        plt.barh(imp_df["Feature"], imp_df["Importance"], color='salmon')
+        plt.xlabel("Importance moyenne normalisée")
+        plt.title("TFT V4 - Quelles variables passées comptent le plus ?")
+        plt.gca().invert_yaxis()
+        plt.grid(axis='x', linestyle='--', alpha=0.7)
+        path = f"{result_dir}/{timestamp}_feature_importance_v4.png"
+        if save_figures: fig.savefig(path, bbox_inches="tight")
+        if show_figures: plt.show()
+        plt.close(fig)
     # ------------------ PLOTTING & SAVING ------------------ #
 
     def save_or_show(fig, name):

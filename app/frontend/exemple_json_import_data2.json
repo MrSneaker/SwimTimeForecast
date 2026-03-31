@@ -1,0 +1,23 @@
+[
+  { "date": "2018-03-10", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 108.50 },
+  { "date": "2018-06-15", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 106.20 },
+  { "date": "2018-12-05", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 107.10 },
+  { "date": "2019-04-20", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 104.80 },
+  { "date": "2019-07-02", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 103.15 },
+  { "date": "2019-11-15", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 104.00 },
+  { "date": "2020-02-22", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 103.40 },
+  { "date": "2020-07-10", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 102.10 },
+  { "date": "2020-12-12", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 102.80 },
+  { "date": "2021-03-25", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 102.15 },
+  { "date": "2021-06-18", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 101.90 },
+  { "date": "2021-11-20", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 102.40 },
+  { "date": "2022-02-14", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 102.20 },
+  { "date": "2022-05-30", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 101.85 },
+  { "date": "2022-12-05", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 102.50 },
+  { "date": "2023-03-15", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 100.90 },
+  { "date": "2023-06-22", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 99.40 },
+  { "date": "2023-11-10", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 100.20 },
+  { "date": "2024-02-18", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 99.80 },
+  { "date": "2024-05-12", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 98.60 },
+  { "date": "2024-07-05", "nage": "Nage Libre", "distance": 100, "bassin": 50, "temps": 97.95 }
+]

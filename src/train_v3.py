@@ -19,7 +19,7 @@ from .early_stopper import EarlyStopper
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 FEATURE_COLS = ["perf_temps_sec","nageur_age_mois_scaled","perf_nage_encoded",
              "perf_distance_encoded","perf_bassin_encoded","mois_saison_sin",
-             "mois_saison_cos","nageur_sexe_encoded"]
+             "mois_saison_cos","nageur_sexe_encoded", "days_since_last_log"]
 TARGET_COL = "perf_temps_sec"
 
 # =============================================================
@@ -73,7 +73,7 @@ def load_and_prep_data(seq_len=20, horizon=3, sample_frac=1.0):
     return train_df, val_df, len(train_df.columns)
 
 # =============================================================
-# 2. TRAINING ROUTINE (Le coeur du réacteur)
+# 2. TRAINING ROUTINE
 # =============================================================
 def run_training(params, train_df, val_df, trial=None, save_model=False, plot_loss=False):
     """
@@ -173,7 +173,7 @@ def run_training(params, train_df, val_df, trial=None, save_model=False, plot_lo
     return avg_val_loss # C'est ce que Optuna va minimiser
 
 # =============================================================
-# 3. LEGACY WRAPPER (Pour compatibilité)
+# 3. LEGACY WRAPPER
 # =============================================================
 def train(EPOCHS=10, BATCH_SIZE=64, use_optimized=False):
     """Fonction wrapper pour lancer un entraînement manuel."""
