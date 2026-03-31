@@ -10,6 +10,8 @@ import pandas as pd
 from typing import List
 import numpy as np
 
+from src.SwimTFT import SwimTFT
+
 
 # Import du modèle V4
 from .SwimTFTv2 import TemporalFusionTransformer
