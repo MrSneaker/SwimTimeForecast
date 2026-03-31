@@ -101,6 +101,8 @@ def run_training(params, train_df, val_df, trial=None, save_model=False, plot_lo
     SEQ_LEN = params.get("seq_len", 20)
     HORIZON = params.get("horizon", 3)
     
+    best_model_path = os.path.join(os.path.dirname(__file__), "../models/swim_tft_v4_best.pt")
+    
     train_ds = SwimDatasetTFTV2(train_df, past_cols=PAST_COLS, future_cols=FUTURE_COLS, static_cols=STATIC_COLS, target_col=TARGET_COL, seq_len=SEQ_LEN, horizon=HORIZON)
     val_ds = SwimDatasetTFTV2(val_df, past_cols=PAST_COLS, future_cols=FUTURE_COLS, static_cols=STATIC_COLS, target_col=TARGET_COL, seq_len=SEQ_LEN, horizon=HORIZON)
 
@@ -129,7 +131,7 @@ def run_training(params, train_df, val_df, trial=None, save_model=False, plot_lo
 
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     criterion = MultiHorizonQuantileLossV2(quantiles=QUANTILES)
-    early_stopper = EarlyStopper(patience=5, min_delta=0.001)
+    early_stopper = EarlyStopper(patience=5, min_delta=0.0005)
     
     val_losses, train_losses = [], []
 
@@ -183,8 +185,13 @@ def run_training(params, train_df, val_df, trial=None, save_model=False, plot_lo
             if trial.should_prune():
                 raise optuna.exceptions.TrialPruned()
 
-        stop, _ = early_stopper.check(avg_val_loss)
-        if stop: break
+        stop, save = early_stopper.check(avg_val_loss)
+        if save:
+            torch.save(model.state_dict(), best_model_path)
+            print(f"   >>> Best Model Saved: {best_model_path}")
+        if stop:
+            print("Early stopping triggered.")
+            break
             
     if save_model:
         model_path = os.path.join(os.path.dirname(__file__), "../models/swim_tft_v4.pt")

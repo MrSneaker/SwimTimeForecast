@@ -383,15 +383,16 @@ class VariableSelectionNetwork(nn.Module):
         transformed_inputs = torch.stack(transformed_values_output, dim=-2)
         XI_embedding = torch.cat(values_output, dim=-1)
 
-        # Equation (6)
-        v_chi = self.softmax(self.grn_input(XI_embedding, context)).unsqueeze(-2)
-
+        sparse_weights = self.softmax(self.grn_input(XI_embedding, context)) 
+        
         # Equation (8)
-        output = transformed_inputs * v_chi
+        v_chi_expanded = sparse_weights.unsqueeze(-2)
+        output = transformed_inputs * v_chi_expanded
+        
         # output => [batch size, sequence length, inputs, hidden]
         result = output.sum(dim=-2)  # sum over the input dimensions
         # result => [batch size, sequence length, hidden]
-        return result
+        return result, sparse_weights
     
 class ScaledDotProductAttention(nn.Module):
     """
@@ -841,17 +842,17 @@ class TemporalFusionTransformer(nn.Module):
         batch_size = past_inputs.get(list(past_inputs.keys())[0]).shape[0]  # type: ignore
 
         # Embed variables using variable selection networks
-        past = self.variable_selection_past(past_inputs)
-        future = (
-            self.variable_selection_future(future_inputs)
-            if future_inputs is not None and hasattr(self, 'variable_selection_future')
-            else None
-        )
-        static = (
-            self.variable_selection_static(static_inputs)
-            if static_inputs is not None and hasattr(self, 'variable_selection_static')
-            else None
-        )
+        past, past_importances_w = self.variable_selection_past(past_inputs)
+        
+        future, future_importances_w = None, None
+        if future_inputs is not None and hasattr(self, 'variable_selection_future'):
+            future, future_importances_w = self.variable_selection_future(future_inputs)
+
+        static, static_importances_w = None, None
+        if static_inputs is not None and hasattr(self, 'variable_selection_static'):
+            static, static_importances_w = self.variable_selection_static(static_inputs)
+            
+        
 
         h0, c0 = self._init_lstm_states(static, self.device, batch_size)
         encoder_output, (hidden, cell) = self.lstm_encoder(past, hx=(h0, c0))
@@ -868,4 +869,13 @@ class TemporalFusionTransformer(nn.Module):
 
         lstm_output = self.gated_add_norm(lstm_concat, inputs_concat)
         attn_input = self.static_enrichment_grn(lstm_output, context=static)
-        return self._post_process(attn_input, lstm_output) # Masking inputs
+        output, temporal_attention_weights = self._post_process(attn_input, lstm_output) # Masking inputs
+        
+        feat_importances = {
+            "past": past_importances_w,
+            "future": future_importances_w,
+            "static": static_importances_w,
+            "temporal_attention": temporal_attention_weights,
+        }
+        
+        return output, feat_importances  

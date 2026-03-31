@@ -1,9 +1,8 @@
 import optuna
 import json
 import os
-import sys
+import pickle 
 
-# Import de la V4
 try:
     from .train_v4 import load_and_prep_data, run_training
 except ImportError:
@@ -16,23 +15,23 @@ N_TRIALS = 30
 SAMPLE_FRAC = 0.2  # On garde 20% des nageurs pour aller vite pendant la recherche
 EPOCHS_PER_TRIAL = 10
 
+# --- CACHE ---
+CACHE_DIR = "../optuna/data_cache"
+TRAIN_CACHE_PATH = os.path.join(CACHE_DIR, f"train_cache_v4_{SAMPLE_FRAC}.pkl")
+VAL_CACHE_PATH = os.path.join(CACHE_DIR, f"val_cache_v4_{SAMPLE_FRAC}.pkl")
+
 def objective(trial):
-    # Paramètres suggérés par Optuna
     params = {
         "epochs": EPOCHS_PER_TRIAL,
         
-        # Batch Size: Attention à la VRAM avec les dictionnaires du V4
         "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128, 256, 512]),
         
-        # Learning Rate: Echelle logarithmique
         "lr": trial.suggest_float("lr", 1e-5, 5e-3, log=True),
         
-        # TFT V4 Params
         "hidden_dim": trial.suggest_categorical("hidden_dim", [32, 64, 128, 256, 512]),
         "dropout": trial.suggest_float("dropout", 0.1, 0.6),
         "n_heads": trial.suggest_categorical("n_heads", [2, 4, 8]),
         
-        # Séquence (Fixe pour le moment, mais Optuna pourrait les chercher)
         "seq_len": 20,
         "horizon": 3
     }
@@ -42,7 +41,7 @@ def objective(trial):
         # On force hidden_dim à être un multiple
         params["hidden_dim"] = (params["hidden_dim"] // params["n_heads"]) * params["n_heads"]
 
-    # Lancement de l'entraînement avec le trial pour le Pruning (arrêt précoce)
+    # Lancement de l'entraînement avec le trial pour le pruning
     val_loss = run_training(
         params=params, 
         train_df=train_df_cache, 
@@ -55,12 +54,29 @@ def objective(trial):
     return val_loss
 
 if __name__ == "__main__":
-    print(">>> Pré-chargement des données en RAM pour la V4...")
-    train_df_cache, val_df_cache = load_and_prep_data(seq_len=20, horizon=3, sample_frac=SAMPLE_FRAC)
+    os.makedirs("../optuna", exist_ok=True)
+    os.makedirs(CACHE_DIR, exist_ok=True)
+
+    # --- LOGIQUE DE CACHE DES DONNÉES ---
+    if os.path.exists(TRAIN_CACHE_PATH) and os.path.exists(VAL_CACHE_PATH):
+        print(f">>> [CACHE] Chargement des données d'optimisation strictes depuis {CACHE_DIR}...")
+        with open(TRAIN_CACHE_PATH, "rb") as f:
+            train_df_cache = pickle.load(f)
+        with open(VAL_CACHE_PATH, "rb") as f:
+            val_df_cache = pickle.load(f)
+    else:
+        print(">>> [INIT] Pré-chargement et échantillonnage initial des données pour la V4...")
+        train_df_cache, val_df_cache = load_and_prep_data(seq_len=20, horizon=3, sample_frac=SAMPLE_FRAC)
+        
+        print(">>> [CACHE] Sauvegarde de l'échantillon pour garantir l'équité des prochains lancements...")
+        with open(TRAIN_CACHE_PATH, "wb") as f:
+            pickle.dump(train_df_cache, f)
+        with open(VAL_CACHE_PATH, "wb") as f:
+            pickle.dump(val_df_cache, f)
+    # -----------------------------------
     
     pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=3)
     
-    os.makedirs("../optuna", exist_ok=True)
     db_path = os.path.join(os.path.dirname(__file__), "../optuna/optuna_v4.db")
     storage_url = f"sqlite:///{db_path}"
     study_name = "tft_v4_optimization"
@@ -83,7 +99,7 @@ if __name__ == "__main__":
         print("\n[!] Optimisation interrompue par l'utilisateur (Ctrl+C).")
         print("[!] Progression sauvegardée en toute sécurité dans la BDD.")
 
-    #  Résultats (Affiche les meilleurs résultats globaux, depuis le tout premier lancement)
+    #  Résultats
     if len(study.trials) > 0:
         print("\n" + "="*40)
         print(" MEILLEURS PARAMÈTRES GLOBAUX (TFT V4)")
