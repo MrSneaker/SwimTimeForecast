@@ -10,11 +10,14 @@ import pandas as pd
 from typing import List
 import numpy as np
 
-from src.SwimTFT import SwimTFT
-
-
-# Import du modèle V4
-from .SwimTFTv2 import TemporalFusionTransformer
+# Import du modèle V4.
+# Double import pour fonctionner dans les deux modes de lancement :
+#   - en local via `uvicorn app.backend.main:app` (mode package → import relatif)
+#   - dans le conteneur Docker via `uvicorn main:app` depuis /app (mode script → import absolu)
+try:
+    from .SwimTFTv2 import TemporalFusionTransformer  # mode package (local)
+except ImportError:  # pragma: no cover
+    from SwimTFTv2 import TemporalFusionTransformer  # mode script (Docker)
 
 # === Config & Constantes ===
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
