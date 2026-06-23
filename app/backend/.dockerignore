@@ -1,0 +1,7 @@
+# Le backend ne charge que swim_tft_v4.pt (cf. main.py) — on exclut les modèles
+# inutilisés pour alléger l'image (~20 Mo) et le build context.
+models/swim_lstm.pt
+models/swim_tft_v3.pt
+__pycache__/
+*.pyc
+.git

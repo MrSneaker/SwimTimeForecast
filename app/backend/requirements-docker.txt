@@ -1,8 +1,12 @@
+# Versions épinglées sur le set validé en smoke-test (build + chargement
+# swim_tft_v4.pt + /predict_v4 OK). Évite qu'un rebuild attrape une version
+# majeure incompatible (ex. torch 3.x) et garantit la reproductibilité du
+# modèle servi. Mettre à jour sciemment uniquement.
 fastapi==0.115.0
 uvicorn[standard]==0.32.0
-numpy>=1.24.0,<3.0.0
-pandas>=2.0.0
-pydantic>=2.0.0
+numpy==2.4.6
+pandas==3.0.3
+pydantic==2.13.4
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch>=2.0.0
-scikit-learn>=1.3.0
+torch==2.12.1
+scikit-learn==1.9.0
